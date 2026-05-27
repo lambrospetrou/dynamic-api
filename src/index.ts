@@ -1,8 +1,6 @@
 import { Hono } from "hono";
 
-type Bindings = Record<string, never>;
-
-const app = new Hono<{ Bindings: Bindings }>();
+const app = new Hono<{ Bindings: Env }>();
 
 app.get("/", (c) => {
   return c.json({ message: "dynamic-api is running" });
