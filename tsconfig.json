@@ -1,0 +1,10 @@
+{
+  "target": "ES2022",
+  "module": "ES2022",
+  "moduleResolution": "Bundler",
+  "strict": true,
+  "lib": ["ES2022"],
+  "types": ["@cloudflare/workers-types"],
+  "jsx": "react-jsx",
+  "jsxImportSource": "hono/jsx"
+}
