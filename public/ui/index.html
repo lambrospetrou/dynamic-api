@@ -6,10 +6,692 @@
         <meta name="color-scheme" content="light dark" />
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.orange.min.css" />
         <title>Dynamic API UI</title>
+        <style>
+            .app-list {
+                list-style: none;
+                padding: 0;
+            }
+            .app-card {
+                border: 1px solid var(--pico-muted-border-color);
+                border-radius: var(--pico-border-radius);
+                padding: 1rem 1.25rem;
+                margin-bottom: 0.75rem;
+                cursor: pointer;
+                transition: background-color 0.15s;
+            }
+            .app-card:hover {
+                background: var(--pico-card-background-color);
+            }
+            .app-card h3 {
+                margin: 0 0 0.25rem;
+                font-size: 1rem;
+            }
+            .app-card p {
+                margin: 0;
+                font-size: 0.875rem;
+                color: var(--pico-muted-color);
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .app-card .meta {
+                font-size: 0.75rem;
+                color: var(--pico-muted-color);
+                margin-top: 0.4rem;
+            }
+            .badge {
+                font-size: 0.7rem;
+                background: var(--pico-primary-background);
+                color: var(--pico-primary-inverse);
+                border-radius: 9999px;
+                padding: 0.1rem 0.5rem;
+                margin-left: 0.4rem;
+            }
+            .token-row {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                margin-bottom: 0.5rem;
+            }
+            .token-row code {
+                flex: 1;
+                font-size: 0.8rem;
+                word-break: break-all;
+            }
+            .token-value {
+                background: var(--pico-code-background-color);
+                padding: 0.5rem;
+                border-radius: var(--pico-border-radius);
+                font-family: monospace;
+                font-size: 0.8rem;
+                word-break: break-all;
+                margin: 0.5rem 0 1rem;
+            }
+            .version-item {
+                border-left: 3px solid var(--pico-primary);
+                padding: 0.5rem 0.75rem;
+                margin-bottom: 0.5rem;
+            }
+            .version-item.current {
+                border-color: var(--pico-color);
+            }
+            pre {
+                background: var(--pico-code-background-color);
+                border-radius: var(--pico-border-radius);
+                padding: 1rem;
+                overflow-x: auto;
+                font-size: 0.75rem;
+                max-height: 400px;
+            }
+            .back-btn {
+                margin-bottom: 1rem;
+            }
+            .section-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 1rem;
+            }
+            .section-header h2 {
+                margin: 0;
+            }
+            .empty {
+                text-align: center;
+                color: var(--pico-muted-color);
+                padding: 2rem;
+            }
+            .error {
+                color: var(--pico-del-color);
+                font-size: 0.875rem;
+                margin-top: 0.25rem;
+            }
+            dialog article {
+                max-width: 560px;
+            }
+            .spinner {
+                display: inline-block;
+                width: 1rem;
+                height: 1rem;
+                border: 2px solid currentColor;
+                border-top-color: transparent;
+                border-radius: 50%;
+                animation: spin 0.6s linear infinite;
+                vertical-align: middle;
+                margin-right: 0.3rem;
+            }
+            @keyframes spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+            small.muted {
+                color: var(--pico-muted-color);
+            }
+            .tabs {
+                display: flex;
+                gap: 0.5rem;
+                border-bottom: 1px solid var(--pico-muted-border-color);
+                margin-bottom: 1.5rem;
+            }
+            .tab-btn {
+                background: none;
+                border: none;
+                border-bottom: 2px solid transparent;
+                padding: 0.5rem 0.75rem;
+                cursor: pointer;
+                color: var(--pico-muted-color);
+                font-size: 0.9rem;
+                margin-bottom: -1px;
+            }
+            .tab-btn.active {
+                border-bottom-color: var(--pico-primary);
+                color: var(--pico-color);
+            }
+        </style>
+        <script type="importmap">
+            {
+                "imports": {
+                    "preact": "https://esm.sh/preact@10.23.1",
+                    "preact/": "https://esm.sh/preact@10.23.1/",
+                    "@preact/signals": "https://esm.sh/@preact/signals@1.3.0?external=preact",
+                    "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+                }
+            }
+        </script>
     </head>
     <body>
-        <main class="container">
-            <h1>Dynamic API UI</h1>
-        </main>
+        <main class="container" id="root"></main>
+
+        <script type="module">
+            import { h, render } from "preact";
+            import { useState, useRef } from "preact/hooks";
+            import { signal, computed, effect, batch } from "@preact/signals";
+            import { html } from "htm/preact";
+            // const html = htm.bind(h);
+
+            // ── State ────────────────────────────────────────────────────────────────────
+            const page = signal("list"); // 'list' | 'detail'
+            const apps = signal([]);
+            const loading = signal(false);
+            const selectedApp = signal(null); // full AppRecord
+            const appTokens = signal([]);
+            const appHistory = signal([]);
+            const activeTab = signal("detail"); // 'detail' | 'tokens' | 'history'
+            const mintedToken = signal(null); // one-time display after minting
+            const globalError = signal(null);
+
+            // ── API helpers ───────────────────────────────────────────────────────────────
+            async function apiFetch(path, opts = {}) {
+                const res = await fetch(`/api${path}`, {
+                    headers: { "Content-Type": "application/json", ...opts.headers },
+                    ...opts,
+                });
+                const text = await res.text();
+                let body;
+                try {
+                    body = JSON.parse(text);
+                } catch {
+                    body = text;
+                }
+                if (!res.ok) throw new Error(body?.error || body?.message || `HTTP ${res.status}`);
+                return body;
+            }
+
+            async function loadApps() {
+                loading.value = true;
+                globalError.value = null;
+                try {
+                    apps.value = (await apiFetch("/apps")).apps;
+                } catch (e) {
+                    globalError.value = e.message;
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            async function loadApp(id) {
+                loading.value = true;
+                try {
+                    const [app, tokens, history] = await Promise.all([
+                        apiFetch(`/apps/${id}`),
+                        apiFetch(`/apps/${id}/tokens`),
+                        apiFetch(`/apps/${id}/history`),
+                    ]);
+                    batch(() => {
+                        selectedApp.value = app;
+                        appTokens.value = tokens.tokens;
+                        appHistory.value = history.history;
+                        mintedToken.value = null;
+                    });
+                } catch (e) {
+                    globalError.value = e.message;
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            // ── Components ────────────────────────────────────────────────────────────────
+
+            function Spinner() {
+                return html`<span class="spinner"></span>`;
+            }
+
+            function CopyButton({ text }) {
+                const [copied, setCopied] = useState(false);
+                async function copy() {
+                    await navigator.clipboard.writeText(text);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                }
+                return html`<button class="secondary outline" onClick=${copy}>
+                    ${copied ? "✓ Copied" : "Copy"}
+                </button>`;
+            }
+
+            // ── Create App Dialog ─────────────────────────────────────────────────────────
+            function CreateAppDialog({ onClose, onCreated }) {
+                const [desc, setDesc] = useState("");
+                const [slug, setSlug] = useState("");
+                const [err, setErr] = useState("");
+                const [busy, setBusy] = useState(false);
+
+                async function submit(e) {
+                    e.preventDefault();
+                    if (!desc.trim()) {
+                        setErr("Description is required.");
+                        return;
+                    }
+                    setBusy(true);
+                    setErr("");
+                    try {
+                        const body = { description: desc.trim() };
+                        if (slug.trim()) body.slug = slug.trim();
+                        const app = await apiFetch("/apps", { method: "POST", body: JSON.stringify(body) });
+                        onCreated(app);
+                    } catch (e) {
+                        setErr(e.message);
+                    } finally {
+                        setBusy(false);
+                    }
+                }
+
+                return html` <dialog open>
+                    <article>
+                        <header>
+                            <button class="close" aria-label="Close" onClick=${onClose} rel="prev"></button>
+                            <h3>Create App</h3>
+                        </header>
+                        <form onSubmit=${submit}>
+                            <label>
+                                Description
+                                <textarea
+                                    name="description"
+                                    placeholder="Describe your app — Claude will generate the code."
+                                    rows="5"
+                                    value=${desc}
+                                    onInput=${(e) => setDesc(e.target.value)}
+                                    required
+                                ></textarea>
+                                <small class="muted"
+                                    >Max 4000 chars. Claude generates a Cloudflare Worker from this.</small
+                                >
+                            </label>
+                            <label>
+                                Slug <small class="muted">(optional)</small>
+                                <input
+                                    type="text"
+                                    name="slug"
+                                    placeholder="my-cool-app"
+                                    value=${slug}
+                                    onInput=${(e) => setSlug(e.target.value)}
+                                />
+                            </label>
+                            ${err && html`<p class="error">${err}</p>`}
+                            <footer>
+                                <button type="button" class="secondary" onClick=${onClose} disabled=${busy}>
+                                    Cancel
+                                </button>
+                                <button type="submit" disabled=${busy}>
+                                    ${busy ? html`<${Spinner} />Generating…` : "Create"}
+                                </button>
+                            </footer>
+                        </form>
+                    </article>
+                </dialog>`;
+            }
+
+            // ── App List ──────────────────────────────────────────────────────────────────
+            function AppList() {
+                const [showCreate, setShowCreate] = useState(false);
+
+                async function openApp(id) {
+                    page.value = "detail";
+                    activeTab.value = "detail";
+                    await loadApp(id);
+                }
+
+                async function handleCreated(app) {
+                    setShowCreate(false);
+                    await loadApps();
+                    openApp(app.id);
+                }
+
+                const list = apps.value;
+
+                return html` <div>
+                    <div class="section-header">
+                        <h2>Apps</h2>
+                        <button onClick=${() => setShowCreate(true)}>+ New App</button>
+                    </div>
+                    ${globalError.value && html`<p class="error">${globalError.value}</p>`}
+                    ${loading.value
+                        ? html`<p><${Spinner} /> Loading…</p>`
+                        : list.length === 0
+                          ? html`<p class="empty">No apps yet. Create one!</p>`
+                          : html`<ul class="app-list">
+                                ${list.map(
+                                    (a) =>
+                                        html` <li class="app-card" onClick=${() => openApp(a.id)} key=${a.id}>
+                                            <h3>${a.slug}<span class="badge">v${a.current_version}</span></h3>
+                                            <p>${a.description}</p>
+                                            <div class="meta">
+                                                ${a.id} · updated ${new Date(a.last_updated).toLocaleString()}
+                                            </div>
+                                        </li>`,
+                                )}
+                            </ul>`}
+                    ${showCreate &&
+                    html`<${CreateAppDialog} onClose=${() => setShowCreate(false)} onCreated=${handleCreated} />`}
+                </div>`;
+            }
+
+            // ── Detail Tab ────────────────────────────────────────────────────────────────
+            function DetailTab() {
+                const app = selectedApp.value;
+                const [editing, setEditing] = useState(false);
+                const [desc, setDesc] = useState("");
+                const [err, setErr] = useState("");
+                const [busy, setBusy] = useState(false);
+                const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+                const [viewCode, setViewCode] = useState(false);
+
+                function startEdit() {
+                    setDesc(app.current.prompt);
+                    setEditing(true);
+                    setErr("");
+                }
+
+                async function submitEdit(e) {
+                    e.preventDefault();
+                    if (!desc.trim()) {
+                        setErr("Description required.");
+                        return;
+                    }
+                    setBusy(true);
+                    setErr("");
+                    try {
+                        await apiFetch(`/apps/${app.id}`, {
+                            method: "PUT",
+                            body: JSON.stringify({ description: desc.trim() }),
+                        });
+                        setEditing(false);
+                        await loadApp(app.id);
+                    } catch (e) {
+                        setErr(e.message);
+                    } finally {
+                        setBusy(false);
+                    }
+                }
+
+                return html` <div>
+                    <dl>
+                        <dt>ID</dt>
+                        <dd><code>${app.id}</code></dd>
+                        <dt>Slug</dt>
+                        <dd><code>${app.slug}</code></dd>
+                        <dt>Created</dt>
+                        <dd>${new Date(app.created_at).toLocaleString()}</dd>
+                        <dt>Current version</dt>
+                        <dd>v${app.current.version} · ${new Date(app.current.created_at).toLocaleString()}</dd>
+                    </dl>
+
+                    ${!editing
+                        ? html`
+                              <div class="section-header" style="margin-top:1rem">
+                                  <h4 style="margin:0">Description</h4>
+                                  <button class="secondary outline" onClick=${startEdit}>Edit</button>
+                              </div>
+                              <p>${app.current.prompt}</p>
+                          `
+                        : html`
+                              <form onSubmit=${submitEdit} style="margin-top:1rem">
+                                  <label>
+                                      New description
+                                      <textarea
+                                          rows="6"
+                                          value=${desc}
+                                          onInput=${(e) => setDesc(e.target.value)}
+                                          required
+                                      ></textarea>
+                                  </label>
+                                  ${err && html`<p class="error">${err}</p>`}
+                                  <div style="display:flex;gap:0.5rem">
+                                      <button
+                                          type="button"
+                                          class="secondary"
+                                          onClick=${() => setEditing(false)}
+                                          disabled=${busy}
+                                      >
+                                          Cancel
+                                      </button>
+                                      <button type="submit" disabled=${busy}>
+                                          ${busy ? html`<${Spinner} />Regenerating…` : "Save & Regenerate"}
+                                      </button>
+                                  </div>
+                              </form>
+                          `}
+
+                    <details style="margin-top:1.5rem">
+                        <summary>View generated code (v${app.current.version})</summary>
+                        <pre>${app.current.code}</pre>
+                    </details>
+
+                    <p style="margin-top:1.5rem">
+                        <small class="muted">Execution URL: <code>${location.origin}/apps/${app.id}/</code></small>
+                    </p>
+                </div>`;
+            }
+
+            // ── Tokens Tab ────────────────────────────────────────────────────────────────
+            function TokensTab() {
+                const app = selectedApp.value;
+                const tokens = appTokens.value;
+                const [label, setLabel] = useState("");
+                const [busy, setBusy] = useState(false);
+                const [err, setErr] = useState("");
+                const [revoking, setRevoking] = useState(null);
+
+                async function mintToken(e) {
+                    e.preventDefault();
+                    setBusy(true);
+                    setErr("");
+                    try {
+                        const body = {};
+                        if (label.trim()) body.label = label.trim();
+                        const res = await apiFetch(`/apps/${app.id}/tokens`, {
+                            method: "POST",
+                            body: JSON.stringify(body),
+                        });
+                        mintedToken.value = res;
+                        setLabel("");
+                        appTokens.value = (await apiFetch(`/apps/${app.id}/tokens`)).tokens;
+                    } catch (e) {
+                        setErr(e.message);
+                    } finally {
+                        setBusy(false);
+                    }
+                }
+
+                async function revoke(tokenId) {
+                    setRevoking(tokenId);
+                    try {
+                        await apiFetch(`/apps/${app.id}/tokens/${tokenId}`, { method: "DELETE" });
+                        appTokens.value = appTokens.value.filter((t) => t.id !== tokenId);
+                        if (mintedToken.value?.id === tokenId) mintedToken.value = null;
+                    } catch (e) {
+                        globalError.value = e.message;
+                    } finally {
+                        setRevoking(null);
+                    }
+                }
+
+                return html` <div>
+                    ${mintedToken.value &&
+                    html` <article style="border:1px solid var(--pico-primary);padding:1rem;margin-bottom:1.5rem">
+                        <strong>Token created — copy it now, it won't be shown again.</strong>
+                        <div class="token-value">${mintedToken.value.token}</div>
+                        <${CopyButton} text=${mintedToken.value.token} />
+                        <button
+                            class="secondary outline"
+                            style="margin-left:0.5rem"
+                            onClick=${() => (mintedToken.value = null)}
+                        >
+                            Dismiss
+                        </button>
+                    </article>`}
+
+                    <form
+                        onSubmit=${mintToken}
+                        style="display:flex;gap:0.5rem;align-items:flex-end;margin-bottom:1.5rem;flex-wrap:wrap"
+                    >
+                        <label style="flex:1;margin:0">
+                            Label <small class="muted">(optional)</small>
+                            <input
+                                type="text"
+                                value=${label}
+                                onInput=${(e) => setLabel(e.target.value)}
+                                placeholder="e.g. local-dev"
+                            />
+                        </label>
+                        <button type="submit" disabled=${busy} style="margin-top:0.5rem">
+                            ${busy ? html`<${Spinner} />Minting…` : "Mint Token"}
+                        </button>
+                        ${err && html`<p class="error" style="width:100%;margin:0">${err}</p>`}
+                    </form>
+
+                    ${tokens.length === 0
+                        ? html`<p class="empty">No tokens yet.</p>`
+                        : tokens.map(
+                              (t) =>
+                                  html` <div class="token-row" key=${t.id}>
+                                      <div style="flex:1">
+                                          <code style="font-size:0.8rem">${t.id}</code>
+                                          ${t.label && html` · <small>${t.label}</small>`}
+                                          <br /><small class="muted"
+                                              >Created ${new Date(t.created_at).toLocaleString()}</small
+                                          >
+                                      </div>
+                                      <button
+                                          class="secondary outline"
+                                          onClick=${() => revoke(t.id)}
+                                          disabled=${revoking === t.id}
+                                          aria-busy=${revoking === t.id}
+                                      >
+                                          Revoke
+                                      </button>
+                                  </div>`,
+                          )}
+                </div>`;
+            }
+
+            // ── History Tab ───────────────────────────────────────────────────────────────
+            function HistoryTab() {
+                const app = selectedApp.value;
+                const history = appHistory.value;
+                const [expanded, setExpanded] = useState(null);
+                const [code, setCode] = useState({});
+                const [loadingV, setLoadingV] = useState(null);
+
+                async function toggleVersion(v) {
+                    if (expanded === v) {
+                        setExpanded(null);
+                        return;
+                    }
+                    setExpanded(v);
+                    if (code[v]) return;
+                    setLoadingV(v);
+                    try {
+                        const res = await apiFetch(`/apps/${app.id}/history/${v}`);
+                        setCode((c) => ({ ...c, [v]: res.code }));
+                    } catch (e) {
+                        globalError.value = e.message;
+                    } finally {
+                        setLoadingV(null);
+                    }
+                }
+
+                if (history.length === 0) return html`<p class="empty">No history.</p>`;
+
+                return html` <div>
+                    ${[...history].reverse().map(
+                        (v) =>
+                            html` <div
+                                class="version-item ${v.version === app.current.version ? "current" : ""}"
+                                key=${v.version}
+                            >
+                                <div style="display:flex;justify-content:space-between;align-items:center">
+                                    <div>
+                                        <strong>v${v.version}</strong>${v.version === app.current.version &&
+                                        html` <span class="badge">current</span>`} <br /><small class="muted"
+                                            >${new Date(v.created_at).toLocaleString()}</small
+                                        >
+                                    </div>
+                                    <button
+                                        class="secondary outline"
+                                        onClick=${() => toggleVersion(v.version)}
+                                    >
+                                        ${expanded === v.version ? "Hide" : "View code"}
+                                    </button>
+                                </div>
+                                <p style="margin:0.4rem 0 0;font-size:0.875rem">${v.prompt}</p>
+                                ${expanded === v.version &&
+                                html` <div style="margin-top:0.5rem">
+                                    ${loadingV === v.version
+                                        ? html`<p><${Spinner} /> Loading…</p>`
+                                        : html`<pre>${code[v.version]}</pre>`}
+                                </div>`}
+                            </div>`,
+                    )}
+                </div>`;
+            }
+
+            // ── App Detail ────────────────────────────────────────────────────────────────
+            function AppDetail() {
+                const app = selectedApp.value;
+
+                async function goBack() {
+                    batch(() => {
+                        page.value = "list";
+                        selectedApp.value = null;
+                        mintedToken.value = null;
+                    });
+                    await loadApps();
+                }
+
+                if (!app && loading.value) return html`<p><${Spinner} /> Loading…</p>`;
+                if (!app) return html`<p class="error">App not found.</p>`;
+
+                const tabs = [
+                    { id: "detail", label: "Details" },
+                    { id: "tokens", label: "Tokens" },
+                    { id: "history", label: `History (${appHistory.value.length})` },
+                ];
+
+                return html` <div>
+                    <button class="secondary outline back-btn" onClick=${goBack}>← Back to Apps</button>
+                    <div class="section-header">
+                        <h2 style="display:flex;align-items:center;gap:0.5rem">
+                            ${app.slug}
+                            <span class="badge">v${app.current.version}</span>
+                        </h2>
+                    </div>
+                    ${globalError.value && html`<p class="error">${globalError.value}</p>`}
+
+                    <nav class="tabs">
+                        ${tabs.map(
+                            (t) =>
+                                html` <button
+                                    class="tab-btn ${activeTab.value === t.id ? "active" : ""}"
+                                    onClick=${() => (activeTab.value = t.id)}
+                                    key=${t.id}
+                                >
+                                    ${t.label}
+                                </button>`,
+                        )}
+                    </nav>
+
+                    ${activeTab.value === "detail" && html`<${DetailTab} />`}
+                    ${activeTab.value === "tokens" && html`<${TokensTab} />`}
+                    ${activeTab.value === "history" && html`<${HistoryTab} />`}
+                </div>`;
+            }
+
+            // ── App Shell ─────────────────────────────────────────────────────────────────
+            function App() {
+                return html` <div>
+                    <nav>
+                        <ul>
+                            <li><strong>Dynamic API</strong></li>
+                        </ul>
+                    </nav>
+                    ${page.value === "list" && html`<${AppList} />`}
+                    ${page.value === "detail" && html`<${AppDetail} />`}
+                </div>`;
+            }
+
+            // ── Boot ──────────────────────────────────────────────────────────────────────
+            render(html`<${App} />`, document.getElementById("root"));
+            loadApps();
+        </script>
     </body>
 </html>
