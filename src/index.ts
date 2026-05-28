@@ -156,7 +156,7 @@ app.post("/api/apps/:id/tokens", async (c) => {
   const parsed = v.safeParse(MintTokenSchema, await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: v.flatten(parsed.issues) }, 400);
 
-  const rawToken = crypto.randomUUID().replaceAll("-", "");
+  const rawToken = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
   const tokenHash = await hashToken(rawToken);
   const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
   const tokenRecord = await stub.mintToken(tokenHash, parsed.output.label ?? null);
