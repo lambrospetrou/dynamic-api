@@ -3,7 +3,7 @@ import type { AppRecord } from "../types";
 const appCache = new Map<string, { record: AppRecord; cachedAt: number }>();
 const CACHE_TTL_MS = 60_000;
 
-export async function getAppRecord(appId: string, env: Env): Promise<AppRecord | null> {
+export async function getAppRecord(env: Env, appId: string): Promise<AppRecord | null> {
   const cached = appCache.get(appId);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
     return cached.record;
@@ -27,7 +27,7 @@ export async function getAppRecord(appId: string, env: Env): Promise<AppRecord |
   }
 }
 
-export async function writeAppRecord(record: AppRecord, env: Env): Promise<void> {
+export async function writeAppRecord(env: Env, record: AppRecord): Promise<void> {
   await env.APP_KV.put(`app:${record.id}`, JSON.stringify(record));
   const cached = appCache.get(record.id);
   if (!cached || record.current.version >= cached.record.current.version) {

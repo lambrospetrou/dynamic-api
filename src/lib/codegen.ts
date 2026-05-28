@@ -6,17 +6,19 @@ The code must:
 - Implement: async fetch(request) { ... return new Response(...); }
 - Use only Web Standard APIs (Request, Response, URL, Headers, fetch, crypto, etc.)
 - Not import any external modules or use require()
-- Return appropriate HTTP status codes and JSON responses
+- Return appropriate HTTP status codes and responses of the correct content type (JSON, HTML, plain text, etc.)
 - Handle errors gracefully with try/catch`;
 
 export function validateCode(code: string): boolean {
   return code.includes("export class DynamicHandler") && code.includes("async fetch(");
 }
 
-async function callAI(userContent: string, env: Env): Promise<string> {
-  const result = await (env.AI as any).run("anthropic/claude-sonnet-4.6", {
+async function callAI(env: Env, userContent: string): Promise<string> {
+  const result = await env.AI.run("anthropic/claude-sonnet-4.6", {
+  // const result = await env.AI.run("anthropic/claude-haiku-4.5", {
     system: SYSTEM_PROMPT,
-    max_tokens: 4096,
+    max_tokens: 15_000,
+    temperature: 0.1,
     messages: [{ role: "user", content: userContent }],
   }) as { content: { type: string; text: string }[] };
 
@@ -24,8 +26,8 @@ async function callAI(userContent: string, env: Env): Promise<string> {
 }
 
 export async function generateCode(
-  description: string,
   env: Env,
+  description: string,
   previousCode?: string,
 ): Promise<string> {
   let userContent = description;
@@ -33,12 +35,12 @@ export async function generateCode(
     userContent += `\n\nPrevious version of the code (modify it to satisfy the new description):\n\`\`\`\n${previousCode}\n\`\`\``;
   }
 
-  const code = await callAI(userContent, env);
+  const code = await callAI(env, userContent);
   if (validateCode(code)) return code;
 
   const correctionPrompt =
     `The following code is invalid — it must export a class named DynamicHandler extending WorkerEntrypoint with an async fetch method.\n\nFix it:\n\`\`\`\n${code}\n\`\`\``;
-  const retried = await callAI(correctionPrompt, env);
+  const retried = await callAI(env, correctionPrompt);
 
   if (validateCode(retried)) return retried;
 

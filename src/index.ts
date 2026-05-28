@@ -56,13 +56,19 @@ app.post("/api/apps", async (c) => {
 
   let code: string;
   try {
-    code = await generateCode(input.description, c.env);
+    code = await generateCode(c.env, input.description);
   } catch (err) {
+    console.error({
+      message: "Code generation failed",
+      error: String(err),
+      errorProps: err,
+      appId: id,
+    })
     return c.json({ error: String(err) }, 422);
   }
 
   const appRecord = await appStub.createVersion(id, slug, input.description, code, input.description);
-  await writeAppRecord(appRecord, c.env);
+  await writeAppRecord(c.env, appRecord);
 
   c.executionCtx.waitUntil(
     registry.upsertApp({
@@ -77,7 +83,7 @@ app.post("/api/apps", async (c) => {
 });
 
 app.get("/api/apps/:id", async (c) => {
-  const record = await getAppRecord(c.req.param("id"), c.env);
+  const record = await getAppRecord(c.env, c.req.param("id"));
   if (!record) return c.json({ error: "Not found" }, 404);
   return c.json(record);
 });
@@ -89,12 +95,12 @@ app.put("/api/apps/:id", async (c) => {
   }
   const input = parsed.output;
 
-  const existing = await getAppRecord(c.req.param("id"), c.env);
+  const existing = await getAppRecord(c.env, c.req.param("id"));
   if (!existing) return c.json({ error: "Not found" }, 404);
 
   let code: string;
   try {
-    code = await generateCode(input.description, c.env, existing.current.code);
+    code = await generateCode(c.env, input.description, existing.current.code);
   } catch (err) {
     return c.json({ error: String(err) }, 422);
   }
@@ -103,7 +109,7 @@ app.put("/api/apps/:id", async (c) => {
   const appRecord = await appStub.createVersion(
     existing.id, existing.slug, input.description, code, input.description,
   );
-  await writeAppRecord(appRecord, c.env);
+  await writeAppRecord(c.env, appRecord);
 
   const registryId = c.env.REGISTRY_DO.idFromName("default");
   const registry = c.env.REGISTRY_DO.get(registryId);
@@ -122,7 +128,7 @@ app.put("/api/apps/:id", async (c) => {
 });
 
 app.get("/api/apps/:id/history", async (c) => {
-  const existing = await getAppRecord(c.req.param("id"), c.env);
+  const existing = await getAppRecord(c.env, c.req.param("id"));
   if (!existing) return c.json({ error: "Not found" }, 404);
   const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
   const history = await stub.getHistory();
@@ -130,7 +136,7 @@ app.get("/api/apps/:id/history", async (c) => {
 });
 
 app.get("/api/apps/:id/history/:version", async (c) => {
-  const existing = await getAppRecord(c.req.param("id"), c.env);
+  const existing = await getAppRecord(c.env, c.req.param("id"));
   if (!existing) return c.json({ error: "Not found" }, 404);
   const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
   const version = await stub.getVersion(Number(c.req.param("version")));
@@ -144,12 +150,13 @@ app.get("/api/apps/:id/history/:version", async (c) => {
 
 app.all("/apps/:id/*", async (c) => {
   const appId = c.req.param("id");
-  const appRecord = await getAppRecord(appId, c.env);
+  const appRecord = await getAppRecord(c.env, appId);
   if (!appRecord) return c.json({ error: "Not found" }, 404);
 
   const cacheKey = `${appRecord.id}_${appRecord.current.created_at}`;
   const stub = c.env.LOADER.get(cacheKey, () => ({
     compatibilityDate: "2026-05-27",
+    compatibilityFlags: ["nodejs_compat"],
     mainModule: "handler.js",
     modules: { "handler.js": appRecord.current.code },
   }));

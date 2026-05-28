@@ -7,11 +7,14 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "pretest:hurl": "rm -rf test/hurl/report-json && mkdir -p test/hurl/report-json",
+    "test:hurl": "hurl --variables-file test/hurl/dev.env --test --report-json test/hurl/report-json test/hurl/*.hurl"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.10",
     "@cloudflare/workers-types": "^4.20260527.1",
+    "@orangeopensource/hurl": "^8.0.1",
     "@types/node": "^25.9.1",
     "durable-utils": "^0.3.5",
     "hono": "^4.12.23",

@@ -140,8 +140,8 @@ describe("appCache", () => {
       created_at: new Date().toISOString(),
       current: { version: 1, prompt: "p", code: "c", created_at: new Date().toISOString() },
     };
-    await writeAppRecord(record, env);
-    const fetched = await getAppRecord("cachetest", env);
+    await writeAppRecord(env, record);
+    const fetched = await getAppRecord(env, "cachetest");
     expect(fetched?.id).toBe("cachetest");
     expect(fetched?.current.version).toBe(1);
   });
@@ -155,10 +155,10 @@ describe("appCache", () => {
       created_at: new Date().toISOString(),
       current: { version: 5, prompt: "p", code: "c", created_at: new Date().toISOString() },
     };
-    await writeAppRecord(newer, env);
+    await writeAppRecord(env, newer);
     const older = { ...newer, current: { ...newer.current, version: 3 } };
-    await writeAppRecord(older, env);
-    const fetched = await getAppRecord("versiontest", env);
+    await writeAppRecord(env, older);
+    const fetched = await getAppRecord(env, "versiontest");
     expect(fetched?.current.version).toBe(5);
   });
 });
