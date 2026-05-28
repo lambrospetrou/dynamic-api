@@ -1,26 +1,26 @@
 {
-  "name": "dynamic-api",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-05-27",
-  "compatibility_flags": ["nodejs_compat", "experimental"],
-  "durable_objects": {
-    "bindings": [
-      { "name": "APP_DO", "class_name": "AppDO" },
-      { "name": "REGISTRY_DO", "class_name": "RegistryDO" }
-    ]
-  },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["AppDO", "RegistryDO"] }
-  ],
-  "kv_namespaces": [
-    // (dynamic-api-apps)
-    { "binding": "APP_KV", "id": "f28f745d72d64afcac3f935ce114f0bb" }
-  ],
-  "worker_loaders": [
-    { "binding": "LOADER" }
-  ],
-  "ai": {
-    "binding": "AI",
-    "remote": true
-  }
+    "name": "dynamic-api",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-05-27",
+    "compatibility_flags": ["nodejs_compat", "experimental"],
+    "assets": {
+        "directory": "public",
+        "binding": "ASSETS",
+    },
+    "durable_objects": {
+        "bindings": [
+            { "name": "APP_DO", "class_name": "AppDO" },
+            { "name": "REGISTRY_DO", "class_name": "RegistryDO" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AppDO", "RegistryDO"] }],
+    "kv_namespaces": [
+        // (dynamic-api-apps)
+        { "binding": "APP_KV", "id": "f28f745d72d64afcac3f935ce114f0bb" },
+    ],
+    "worker_loaders": [{ "binding": "LOADER" }],
+    "ai": {
+        "binding": "AI",
+        "remote": true,
+    },
 }
