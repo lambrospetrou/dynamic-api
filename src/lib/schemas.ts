@@ -14,5 +14,10 @@ export const UpdateAppSchema = v.object({
   description: v.pipe(v.string(), v.minLength(1), v.maxLength(4000)),
 });
 
+export const MintTokenSchema = v.object({
+  label: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(256))),
+});
+
 export type CreateAppInput = v.InferOutput<typeof CreateAppSchema>;
 export type UpdateAppInput = v.InferOutput<typeof UpdateAppSchema>;
+export type MintTokenInput = v.InferOutput<typeof MintTokenSchema>;

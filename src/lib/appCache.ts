@@ -1,6 +1,7 @@
 import type { AppRecord } from "../types";
+import { BoundedCache } from "./boundedCache";
 
-const appCache = new Map<string, { record: AppRecord; cachedAt: number }>();
+const appCache = new BoundedCache<{ record: AppRecord; cachedAt: number }>(500);
 const CACHE_TTL_MS = 60_000;
 
 export async function getAppRecord(env: Env, appId: string): Promise<AppRecord | null> {

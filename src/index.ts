@@ -3,7 +3,8 @@ import * as v from "valibot";
 import { tryWhile } from "durable-utils/retries";
 import { getAppRecord, writeAppRecord } from "./lib/appCache";
 import { generateCode } from "./lib/codegen";
-import { CreateAppSchema, UpdateAppSchema } from "./lib/schemas";
+import { CreateAppSchema, MintTokenSchema, UpdateAppSchema } from "./lib/schemas";
+import { hashToken, invalidateTokenCache, verifyAppToken } from "./lib/tokenCache";
 import type { RegistryAppRecord } from "./types";
 
 export { AppDO } from "./do/AppDO";
@@ -145,8 +146,56 @@ app.get("/api/apps/:id/history/:version", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Token management
+// ---------------------------------------------------------------------------
+
+app.post("/api/apps/:id/tokens", async (c) => {
+  const existing = await getAppRecord(c.env, c.req.param("id"));
+  if (!existing) return c.json({ error: "Not found" }, 404);
+
+  const parsed = v.safeParse(MintTokenSchema, await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: v.flatten(parsed.issues) }, 400);
+
+  const rawToken = crypto.randomUUID().replaceAll("-", "");
+  const tokenHash = await hashToken(rawToken);
+  const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
+  const tokenRecord = await stub.mintToken(tokenHash, parsed.output.label ?? null);
+
+  c.executionCtx.waitUntil(c.env.APP_KV.put(`token:${tokenHash}`, existing.id));
+
+  return c.json({ ...tokenRecord, token: rawToken }, 201);
+});
+
+app.get("/api/apps/:id/tokens", async (c) => {
+  const existing = await getAppRecord(c.env, c.req.param("id"));
+  if (!existing) return c.json({ error: "Not found" }, 404);
+  const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
+  const tokens = await stub.listTokens();
+  return c.json({ tokens });
+});
+
+app.delete("/api/apps/:id/tokens/:tokenId", async (c) => {
+  const existing = await getAppRecord(c.env, c.req.param("id"));
+  if (!existing) return c.json({ error: "Not found" }, 404);
+  const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
+  const deletedHash = await stub.revokeToken(c.req.param("tokenId"));
+  if (!deletedHash) return c.json({ error: "Token not found" }, 404);
+  c.executionCtx.waitUntil(invalidateTokenCache(c.env, deletedHash));
+  return new Response(null, { status: 204 });
+});
+
+// ---------------------------------------------------------------------------
 // Execution plane
 // ---------------------------------------------------------------------------
+
+app.use("/apps/:id/*", async (c, next) => {
+  const rawToken =
+    c.req.header("authorization")?.replace(/^Bearer\s+/i, "") ?? c.req.query("token");
+  if (!rawToken) return c.json({ error: "Unauthorized" }, 401);
+  const valid = await verifyAppToken(c.env, c.req.param("id"), rawToken);
+  if (!valid) return c.json({ error: "Unauthorized" }, 401);
+  return next();
+});
 
 app.all("/apps/:id/*", async (c) => {
   const appId = c.req.param("id");

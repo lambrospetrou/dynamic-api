@@ -24,9 +24,29 @@ jsonpath "$.current.code" isString
 jsonpath "$.current.code" contains "DynamicHandler"
 
 # ---------------------------------------------------------------------------
-# 2. Call the app and assert it returns a number in [1, 100]
+# 2. Mint a token for the app
+# ---------------------------------------------------------------------------
+POST {{base_url}}/api/apps/{{app_id}}/tokens
+Content-Type: application/json
+{
+  "label": "sanity-test"
+}
+
+HTTP 201
+[Captures]
+app_token: jsonpath "$.token"
+
+[Asserts]
+jsonpath "$.id" isString
+jsonpath "$.token" isString
+jsonpath "$.label" == "sanity-test"
+jsonpath "$.created_at" isString
+
+# ---------------------------------------------------------------------------
+# 3. Call the app and assert it returns a number in [1, 100]
 # ---------------------------------------------------------------------------
 GET {{base_url}}/apps/{{app_id}}/
+Authorization: Bearer {{app_token}}
 
 HTTP 200
 Content-Type: application/json
@@ -36,7 +56,14 @@ jsonpath "$.number" >= 1
 jsonpath "$.number" <= 100
 
 # ---------------------------------------------------------------------------
-# 3. List apps and confirm the new app appears
+# 4. Calling the app without a token is rejected
+# ---------------------------------------------------------------------------
+GET {{base_url}}/apps/{{app_id}}/
+
+HTTP 401
+
+# ---------------------------------------------------------------------------
+# 5. List apps and confirm the new app appears
 # ---------------------------------------------------------------------------
 GET {{base_url}}/api/apps
 

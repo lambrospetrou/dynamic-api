@@ -26,3 +26,9 @@ export type RegistryAppRecord = {
   last_updated: string;
   created_at: string;
 };
+
+export type AppToken = {
+  id: string;
+  label: string | null;
+  created_at: string;
+};

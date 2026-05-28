@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { SQLSchemaMigrations, type SQLSchemaMigration } from "durable-utils/sql-migrations";
-import type { AppCtx, AppRecord, AppVersion } from "../types";
+import type { AppCtx, AppRecord, AppToken, AppVersion } from "../types";
 
 const MIGRATIONS: SQLSchemaMigration[] = [
   {
@@ -21,6 +21,19 @@ const MIGRATIONS: SQLSchemaMigration[] = [
       );
       CREATE INDEX IF NOT EXISTS idx_app_meta_created_at ON app_meta(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_app_versions_created_at ON app_versions(created_at DESC);
+    `,
+  },
+  {
+    idMonotonicInc: 2,
+    description: "app tokens",
+    sql: `
+      CREATE TABLE IF NOT EXISTS app_tokens (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL UNIQUE,
+        label TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_app_tokens_hash ON app_tokens(token_hash);
     `,
   },
 ];
@@ -115,5 +128,42 @@ export class AppDO extends DurableObject {
       version: number; prompt: string; code: string; created_at: string;
     }>("SELECT version, prompt, code, created_at FROM app_versions WHERE version = ?", version).toArray();
     return rows[0] ?? null;
+  }
+
+  async mintToken(tokenHash: string, label: string | null): Promise<AppToken> {
+    await this.#ensureSchema();
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    this.ctx.storage.sql.exec(
+      "INSERT INTO app_tokens (id, token_hash, label, created_at) VALUES (?, ?, ?, ?)",
+      id, tokenHash, label, now,
+    );
+    return { id, label, created_at: now };
+  }
+
+  async listTokens(): Promise<AppToken[]> {
+    await this.#ensureSchema();
+    return this.ctx.storage.sql.exec<AppToken>(
+      "SELECT id, label, created_at FROM app_tokens ORDER BY created_at DESC",
+    ).toArray();
+  }
+
+  // Returns the token_hash of the deleted token (for cache invalidation), or null if not found.
+  async revokeToken(tokenId: string): Promise<string | null> {
+    await this.#ensureSchema();
+    const rows = this.ctx.storage.sql.exec<{ token_hash: string }>(
+      "SELECT token_hash FROM app_tokens WHERE id = ?", tokenId,
+    ).toArray();
+    if (rows.length === 0) return null;
+    this.ctx.storage.sql.exec("DELETE FROM app_tokens WHERE id = ?", tokenId);
+    return rows[0].token_hash;
+  }
+
+  async verifyTokenHash(tokenHash: string): Promise<boolean> {
+    await this.#ensureSchema();
+    const rows = this.ctx.storage.sql.exec<{ id: string }>(
+      "SELECT id FROM app_tokens WHERE token_hash = ?", tokenHash,
+    ).toArray();
+    return rows.length > 0;
   }
 }

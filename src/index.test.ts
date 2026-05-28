@@ -185,6 +185,93 @@ describe("validateCode", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Token management
+// ---------------------------------------------------------------------------
+
+describe("token management", () => {
+  it("mints a token with label, lists it (no value), revokes it", async () => {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+
+    const createRes = await jsonFetch("/api/apps", "POST", { description: "Token test app" });
+    expect(createRes.status).toBe(201);
+    const { id: appId } = await createRes.json<any>();
+
+    // Mint with label
+    const mintRes = await jsonFetch(`/api/apps/${appId}/tokens`, "POST", { label: "ci" });
+    expect(mintRes.status).toBe(201);
+    const minted = await mintRes.json<any>();
+    expect(typeof minted.token).toBe("string");
+    expect(minted.token).toHaveLength(32);
+    expect(minted.label).toBe("ci");
+    expect(minted.token).not.toContain("-");
+    const { id: tokenId, token } = minted;
+
+    // List — value must not be present
+    const listRes = await appFetch(`/api/apps/${appId}/tokens`);
+    expect(listRes.status).toBe(200);
+    const { tokens } = await listRes.json<any>();
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0].id).toBe(tokenId);
+    expect(tokens[0].token).toBeUndefined();
+
+    // /apps/:id/* rejects without token
+    const noAuthRes = await appFetch(`/apps/${appId}/`);
+    expect(noAuthRes.status).toBe(401);
+
+    // /apps/:id/* rejects with wrong token
+    const wrongAuthRes = await appFetch(`/apps/${appId}/`, {
+      headers: { Authorization: "Bearer wrongtoken" },
+    });
+    expect(wrongAuthRes.status).toBe(401);
+
+    // /apps/:id/* passes auth with Authorization header (LOADER may 502, that's fine)
+    const authHeaderRes = await appFetch(`/apps/${appId}/`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(authHeaderRes.status).not.toBe(401);
+
+    // /apps/:id/* passes auth with ?token= query param
+    const authQueryRes = await appFetch(`/apps/${appId}/?token=${token}`);
+    expect(authQueryRes.status).not.toBe(401);
+
+    // Revoke
+    const revokeRes = await appFetch(`/api/apps/${appId}/tokens/${tokenId}`, {
+      method: "DELETE",
+    });
+    expect(revokeRes.status).toBe(204);
+
+    // Token no longer accepted
+    const afterRevokeRes = await appFetch(`/apps/${appId}/`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(afterRevokeRes.status).toBe(401);
+  });
+
+  it("mints a token without label", async () => {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+    const createRes = await jsonFetch("/api/apps", "POST", { description: "No label app" });
+    const { id: appId } = await createRes.json<any>();
+    const mintRes = await jsonFetch(`/api/apps/${appId}/tokens`, "POST", {});
+    expect(mintRes.status).toBe(201);
+    const { label } = await mintRes.json<any>();
+    expect(label).toBeNull();
+  });
+
+  it("returns 404 when minting for unknown app", async () => {
+    const res = await jsonFetch("/api/apps/doesnotexist/tokens", "POST", { label: "x" });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 when revoking unknown token id", async () => {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+    const createRes = await jsonFetch("/api/apps", "POST", { description: "Revoke test" });
+    const { id: appId } = await createRes.json<any>();
+    const res = await appFetch(`/api/apps/${appId}/tokens/doesnotexist`, { method: "DELETE" });
+    expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // URL prefix stripping
 // ---------------------------------------------------------------------------
 
