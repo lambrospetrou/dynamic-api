@@ -1,0 +1,24 @@
+{
+  "name": "dynamic-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "APP_DO", "class_name": "AppDO" },
+      { "name": "REGISTRY_DO", "class_name": "RegistryDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["AppDO", "RegistryDO"] }
+  ],
+  "kv_namespaces": [
+    { "binding": "APP_KV", "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }
+  ],
+  "worker_loaders": [
+    { "binding": "LOADER" }
+  ],
+  "ai": {
+    "binding": "AI"
+  }
+}

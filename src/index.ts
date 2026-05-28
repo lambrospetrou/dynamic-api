@@ -1,28 +1,169 @@
 import { Hono } from "hono";
+import * as v from "valibot";
+import { tryWhile } from "durable-utils/retries";
+import { getAppRecord, writeAppRecord } from "./lib/appCache";
+import { generateCode } from "./lib/codegen";
+import { CreateAppSchema, UpdateAppSchema } from "./lib/schemas";
+import type { RegistryAppRecord } from "./types";
 
-const app = new Hono<{ Bindings: Env }>();
+export { AppDO } from "./do/AppDO";
+export { RegistryDO } from "./do/RegistryDO";
 
-app.get("/", (c) => {
-  return c.json({ message: "dynamic-api is running" });
+type HonoEnv = { Bindings: Env };
+
+const app = new Hono<HonoEnv>();
+
+// ---------------------------------------------------------------------------
+// Management API
+// ---------------------------------------------------------------------------
+
+app.get("/api/apps", async (c) => {
+  const registryId = c.env.REGISTRY_DO.idFromName("default");
+  const registry = c.env.REGISTRY_DO.get(registryId);
+  const apps = await registry.listApps();
+  return c.json({ apps });
 });
 
-app.get("/api/items", (c) => {
-  return c.json({ items: [] });
+app.post("/api/apps", async (c) => {
+  const parsed = v.safeParse(CreateAppSchema, await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: v.flatten(parsed.issues) }, 400);
+  }
+  const input = parsed.output;
+
+  const id = crypto.randomUUID().replaceAll("-", "");
+  const slug = input.slug ?? id;
+  const now = new Date().toISOString();
+
+  const appStub = c.env.APP_DO.get(c.env.APP_DO.idFromName(id));
+  await appStub.init(id, "default");
+
+  const registryId = c.env.REGISTRY_DO.idFromName("default");
+  const registry = c.env.REGISTRY_DO.get(registryId);
+
+  const initialRegistryRecord: RegistryAppRecord = {
+    id, slug, description: input.description,
+    current_version: 0, last_updated: now, created_at: now,
+  };
+  try {
+    await tryWhile(
+      () => registry.upsertApp(initialRegistryRecord),
+      (_err, nextAttempt) => nextAttempt <= 5,
+    );
+  } catch {
+    return c.json({ error: "Failed to register app, please retry" }, 500);
+  }
+
+  let code: string;
+  try {
+    code = await generateCode(input.description, c.env);
+  } catch (err) {
+    return c.json({ error: String(err) }, 422);
+  }
+
+  const appRecord = await appStub.createVersion(id, slug, input.description, code, input.description);
+  await writeAppRecord(appRecord, c.env);
+
+  c.executionCtx.waitUntil(
+    registry.upsertApp({
+      id, slug, description: input.description,
+      current_version: appRecord.current.version,
+      last_updated: appRecord.current.created_at,
+      created_at: now,
+    }),
+  );
+
+  return c.json(appRecord, 201);
 });
 
-app.get("/api/items/:id", (c) => {
-  const id = c.req.param("id");
-  return c.json({ id, name: `Item ${id}` });
+app.get("/api/apps/:id", async (c) => {
+  const record = await getAppRecord(c.req.param("id"), c.env);
+  if (!record) return c.json({ error: "Not found" }, 404);
+  return c.json(record);
 });
 
-app.post("/api/items", async (c) => {
-  const body = await c.req.json<{ name: string }>();
-  return c.json({ id: crypto.randomUUID(), name: body.name }, 201);
+app.put("/api/apps/:id", async (c) => {
+  const parsed = v.safeParse(UpdateAppSchema, await c.req.json());
+  if (!parsed.success) {
+    return c.json({ error: v.flatten(parsed.issues) }, 400);
+  }
+  const input = parsed.output;
+
+  const existing = await getAppRecord(c.req.param("id"), c.env);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+
+  let code: string;
+  try {
+    code = await generateCode(input.description, c.env, existing.current.code);
+  } catch (err) {
+    return c.json({ error: String(err) }, 422);
+  }
+
+  const appStub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
+  const appRecord = await appStub.createVersion(
+    existing.id, existing.slug, input.description, code, input.description,
+  );
+  await writeAppRecord(appRecord, c.env);
+
+  const registryId = c.env.REGISTRY_DO.idFromName("default");
+  const registry = c.env.REGISTRY_DO.get(registryId);
+  c.executionCtx.waitUntil(
+    registry.upsertApp({
+      id: existing.id,
+      slug: existing.slug,
+      description: input.description,
+      current_version: appRecord.current.version,
+      last_updated: appRecord.current.created_at,
+      created_at: existing.created_at,
+    }),
+  );
+
+  return c.json(appRecord);
 });
 
-app.delete("/api/items/:id", (c) => {
-  const id = c.req.param("id");
-  return c.json({ deleted: id });
+app.get("/api/apps/:id/history", async (c) => {
+  const existing = await getAppRecord(c.req.param("id"), c.env);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+  const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
+  const history = await stub.getHistory();
+  return c.json({ history });
+});
+
+app.get("/api/apps/:id/history/:version", async (c) => {
+  const existing = await getAppRecord(c.req.param("id"), c.env);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+  const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
+  const version = await stub.getVersion(Number(c.req.param("version")));
+  if (!version) return c.json({ error: "Version not found" }, 404);
+  return c.json(version);
+});
+
+// ---------------------------------------------------------------------------
+// Execution plane
+// ---------------------------------------------------------------------------
+
+app.all("/apps/:id/*", async (c) => {
+  const appId = c.req.param("id");
+  const appRecord = await getAppRecord(appId, c.env);
+  if (!appRecord) return c.json({ error: "Not found" }, 404);
+
+  const cacheKey = `${appRecord.id}_${appRecord.current.created_at}`;
+  const stub = c.env.LOADER.get(cacheKey, () => ({
+    compatibilityDate: "2026-05-27",
+    mainModule: "handler.js",
+    modules: { "handler.js": appRecord.current.code },
+  }));
+
+  const url = new URL(c.req.url);
+  const prefix = `/apps/${appId}`;
+  url.pathname = url.pathname.slice(prefix.length) || "/";
+  const forwardedRequest = new Request(url.toString(), c.req.raw);
+
+  try {
+    return await stub.getEntrypoint("DynamicHandler").fetch(forwardedRequest);
+  } catch (err) {
+    return c.json({ error: String(err) }, 502);
+  }
 });
 
 export default app;
