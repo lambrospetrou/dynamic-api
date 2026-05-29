@@ -299,6 +299,17 @@ describe("visibility", () => {
     const res = await appFetch(`/apps/${id}/`);
     expect(res.status).not.toBe(401);
 
+    // A decorative slug (and version selector) in the ref is ignored for
+    // routing — it resolves to the same app as the bare id.
+    const slugRes = await appFetch(`/apps/${id}-some-slug/`);
+    expect(slugRes.status).toBe(res.status);
+    const selectorRes = await appFetch(`/apps/${id}-some-slug@latest/`);
+    expect(selectorRes.status).toBe(res.status);
+
+    // A garbage ref (no valid appId) 404s rather than spinning up an empty DO.
+    const badRes = await appFetch(`/apps/-nope/`);
+    expect(badRes.status).toBe(404);
+
     // Visibility is surfaced in the registry listing (for the list badge).
     const { apps } = await (await appFetch("/api/apps")).json<any>();
     expect(apps.find((a: any) => a.id === id)?.visibility).toBe("public");

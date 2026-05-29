@@ -496,7 +496,8 @@
                     </details>
 
                     ${(() => {
-                        const base = `${location.origin}/apps/${app.id}/`;
+                        const ref = app.slug && app.slug !== app.id ? `${app.id}-${app.slug}` : app.id;
+                        const base = `${location.origin}/apps/${ref}/`;
                         const isPublic = app.visibility === "public";
                         const tok = testToken.value?.token;
                         const testUrl = isPublic || !tok ? base : `${base}?token=${tok}`;

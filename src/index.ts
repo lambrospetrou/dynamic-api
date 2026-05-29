@@ -4,6 +4,7 @@ import { tryWhile } from "durable-utils/retries";
 import { getAppRecord, writeAppRecord } from "./lib/appCache";
 import { generateCode } from "./lib/codegen";
 import { CreateAppSchema, MintTokenSchema, UpdateAppSchema, UpdateVisibilitySchema } from "./lib/schemas";
+import { generateAppId, parseRef } from "./lib/ref";
 import { getOrRotateTestToken, verifyTestToken } from "./lib/testToken";
 import {
     hashToken,
@@ -38,7 +39,7 @@ app.post("/api/apps", async (c) => {
     }
     const input = parsed.output;
 
-    const id = crypto.randomUUID().replaceAll("-", "");
+    const id = generateAppId();
     const slug = input.slug ?? id;
     const now = new Date().toISOString();
 
@@ -245,7 +246,9 @@ app.delete("/api/apps/:id/tokens/:tokenId", async (c) => {
 // ---------------------------------------------------------------------------
 
 app.use("/apps/:id/*", async (c, next) => {
-    const appId = c.req.param("id");
+    const parsed = parseRef(c.req.param("id"));
+    if (!parsed) return c.json({ error: "Not found" }, 404);
+    const { appId } = parsed;
 
     const record = await getAppRecord(c.env, appId);
     if (!record) return c.json({ error: "Not found" }, 404);
@@ -264,7 +267,10 @@ app.use("/apps/:id/*", async (c, next) => {
 });
 
 app.all("/apps/:id/*", async (c) => {
-    const appId = c.req.param("id");
+    const parsed = parseRef(c.req.param("id"));
+    if (!parsed) return c.json({ error: "Not found" }, 404);
+    const { appId } = parsed;
+
     const appRecord = await getAppRecord(c.env, appId);
     if (!appRecord) return c.json({ error: "Not found" }, 404);
 
@@ -277,7 +283,9 @@ app.all("/apps/:id/*", async (c) => {
     }));
 
     const url = new URL(c.req.url);
-    const prefix = `/apps/${appId}`;
+    // Strip the WHOLE matched segment (id + slug + selector), not just appId,
+    // so the app sees only its own path.
+    const prefix = `/apps/${c.req.param("id")}`;
     url.pathname = url.pathname.slice(prefix.length) || "/";
     const forwardedRequest = new Request(url.toString(), c.req.raw);
 
