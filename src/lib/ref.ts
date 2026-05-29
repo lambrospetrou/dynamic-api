@@ -28,10 +28,10 @@ const encoder = new TextEncoder();
 // Cryptographically random base32 string: one random byte per char, mapped into
 // the alphabet. 256 is a multiple of 32, so `byte % 32` is unbiased.
 function randomBase32(len: number): string {
-    const bytes = crypto.getRandomValues(new Uint8Array(len));
-    let out = "";
-    for (const b of bytes) out += ALPHABET[b % 32];
-    return out;
+	const bytes = crypto.getRandomValues(new Uint8Array(len));
+	let out = "";
+	for (const b of bytes) out += ALPHABET[b % 32];
+	return out;
 }
 
 // HMAC-SHA256(randomPart) mapped to ID_TAG_LEN base32 chars. The tag binds the
@@ -40,22 +40,26 @@ function randomBase32(len: number): string {
 // deterministic (so verify reproduces it) and the output is unpredictable to
 // anyone without the secret.
 async function hmacTag(secret: string, randomPart: string): Promise<string> {
-    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
-        "sign",
-    ]);
-    const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(randomPart));
-    const bytes = new Uint8Array(sig);
-    let tag = "";
-    for (let i = 0; i < ID_TAG_LEN; i++) tag += ALPHABET[bytes[i] % 32];
-    return tag;
+	const key = await crypto.subtle.importKey(
+		"raw",
+		encoder.encode(secret),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(randomPart));
+	const bytes = new Uint8Array(sig);
+	let tag = "";
+	for (let i = 0; i < ID_TAG_LEN; i++) tag += ALPHABET[bytes[i] % 32];
+	return tag;
 }
 
 // Constant-time comparison of two equal-length strings.
 function timingSafeEqual(a: string, b: string): boolean {
-    if (a.length !== b.length) return false;
-    let diff = 0;
-    for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-    return diff === 0;
+	if (a.length !== b.length) return false;
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+	return diff === 0;
 }
 
 /**
@@ -65,8 +69,8 @@ function timingSafeEqual(a: string, b: string): boolean {
  * the parser and verifier that depend on its shape.
  */
 export async function generateAppId(secret: string): Promise<string> {
-    const random = randomBase32(ID_RANDOM_LEN);
-    return random + (await hmacTag(secret, random));
+	const random = randomBase32(ID_RANDOM_LEN);
+	return random + (await hmacTag(secret, random));
 }
 
 /**
@@ -75,20 +79,20 @@ export async function generateAppId(secret: string): Promise<string> {
  * execution plane before resolving an app.
  */
 export async function verifyAppId(secret: string, appId: string): Promise<boolean> {
-    if (!APP_ID_RE.test(appId)) return false;
-    const random = appId.slice(0, ID_RANDOM_LEN);
-    const tag = appId.slice(ID_RANDOM_LEN);
-    return timingSafeEqual(tag, await hmacTag(secret, random));
+	if (!APP_ID_RE.test(appId)) return false;
+	const random = appId.slice(0, ID_RANDOM_LEN);
+	const tag = appId.slice(ID_RANDOM_LEN);
+	return timingSafeEqual(tag, await hmacTag(secret, random));
 }
 
 export const DEFAULT_CHANNEL = "active"; // bare URL resolves here
 export const LATEST = "latest"; // reserved virtual channel = MAX(version)
 
 export type ParsedRef = {
-    appId: string; // authoritative; everything downstream keys off this
-    slug?: string; // decorative; undefined when absent
-    selector?: string; // raw value after '@'; undefined when absent
-    resolvedSelector: string; // selector ?? DEFAULT_CHANNEL
+	appId: string; // authoritative; everything downstream keys off this
+	slug?: string; // decorative; undefined when absent
+	selector?: string; // raw value after '@'; undefined when absent
+	resolvedSelector: string; // selector ?? DEFAULT_CHANNEL
 };
 
 /**
@@ -98,31 +102,31 @@ export type ParsedRef = {
  * format check; authenticity is confirmed separately by verifyAppId.
  */
 export function parseRef(segment: string): ParsedRef | null {
-    if (!segment) return null;
+	if (!segment) return null;
 
-    // 1. Split off the version selector at the LAST '@'.
-    let ref = segment;
-    let selector: string | undefined;
-    const at = segment.lastIndexOf("@");
-    if (at !== -1) {
-        ref = segment.slice(0, at);
-        selector = segment.slice(at + 1) || undefined;
-    }
+	// 1. Split off the version selector at the LAST '@'.
+	let ref = segment;
+	let selector: string | undefined;
+	const at = segment.lastIndexOf("@");
+	if (at !== -1) {
+		ref = segment.slice(0, at);
+		selector = segment.slice(at + 1) || undefined;
+	}
 
-    // 2. appId is everything before the FIRST '-'; the rest is the decorative slug.
-    let appId = ref;
-    let slug: string | undefined;
-    const dash = ref.indexOf("-");
-    if (dash !== -1) {
-        appId = ref.slice(0, dash);
-        slug = ref.slice(dash + 1) || undefined;
-    }
+	// 2. appId is everything before the FIRST '-'; the rest is the decorative slug.
+	let appId = ref;
+	let slug: string | undefined;
+	const dash = ref.indexOf("-");
+	if (dash !== -1) {
+		appId = ref.slice(0, dash);
+		slug = ref.slice(dash + 1) || undefined;
+	}
 
-    // 3. Only the appId is validated for shape. Slug is cosmetic; selector
-    //    validity is decided at resolution time (Phase 2).
-    if (!APP_ID_RE.test(appId)) return null;
+	// 3. Only the appId is validated for shape. Slug is cosmetic; selector
+	//    validity is decided at resolution time (Phase 2).
+	if (!APP_ID_RE.test(appId)) return null;
 
-    return { appId, slug, selector, resolvedSelector: selector ?? DEFAULT_CHANNEL };
+	return { appId, slug, selector, resolvedSelector: selector ?? DEFAULT_CHANNEL };
 }
 
 /**
@@ -130,5 +134,5 @@ export function parseRef(segment: string): ParsedRef | null {
  * or just `<id>` when there is no distinct slug.
  */
 export function formatRef(appId: string, slug?: string): string {
-    return slug && slug !== appId ? `${appId}-${slug}` : appId;
+	return slug && slug !== appId ? `${appId}-${slug}` : appId;
 }

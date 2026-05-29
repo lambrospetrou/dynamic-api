@@ -10,39 +10,38 @@ The code must:
 - Handle errors gracefully with try/catch`;
 
 export function validateCode(code: string): boolean {
-  return code.includes("export class DynamicHandler") && code.includes("async fetch(");
+	return code.includes("export class DynamicHandler") && code.includes("async fetch(");
 }
 
 async function callAI(env: Env, userContent: string): Promise<string> {
-  const result = await env.AI.run("anthropic/claude-sonnet-4.6", {
-  // const result = await env.AI.run("anthropic/claude-haiku-4.5", {
-    system: SYSTEM_PROMPT,
-    max_tokens: 15_000,
-    temperature: 0.1,
-    messages: [{ role: "user", content: userContent }],
-  }) as { content: { type: string; text: string }[] };
+	const result = (await env.AI.run("anthropic/claude-sonnet-4.6", {
+		// const result = await env.AI.run("anthropic/claude-haiku-4.5", {
+		system: SYSTEM_PROMPT,
+		max_tokens: 15_000,
+		temperature: 0.1,
+		messages: [{ role: "user", content: userContent }],
+	})) as { content: { type: string; text: string }[] };
 
-  return result.content.find((b) => b.type === "text")?.text ?? "";
+	return result.content.find((b) => b.type === "text")?.text ?? "";
 }
 
 export async function generateCode(
-  env: Env,
-  description: string,
-  previousCode?: string,
+	env: Env,
+	description: string,
+	previousCode?: string,
 ): Promise<string> {
-  let userContent = description;
-  if (previousCode) {
-    userContent += `\n\nPrevious version of the code (modify it to satisfy the new description):\n\`\`\`\n${previousCode}\n\`\`\``;
-  }
+	let userContent = description;
+	if (previousCode) {
+		userContent += `\n\nPrevious version of the code (modify it to satisfy the new description):\n\`\`\`\n${previousCode}\n\`\`\``;
+	}
 
-  const code = await callAI(env, userContent);
-  if (validateCode(code)) return code;
+	const code = await callAI(env, userContent);
+	if (validateCode(code)) return code;
 
-  const correctionPrompt =
-    `The following code is invalid — it must export a class named DynamicHandler extending WorkerEntrypoint with an async fetch method.\n\nFix it:\n\`\`\`\n${code}\n\`\`\``;
-  const retried = await callAI(env, correctionPrompt);
+	const correctionPrompt = `The following code is invalid — it must export a class named DynamicHandler extending WorkerEntrypoint with an async fetch method.\n\nFix it:\n\`\`\`\n${code}\n\`\`\``;
+	const retried = await callAI(env, correctionPrompt);
 
-  if (validateCode(retried)) return retried;
+	if (validateCode(retried)) return retried;
 
-  throw new Error("Generated code failed validation after retry");
+	throw new Error("Generated code failed validation after retry");
 }
