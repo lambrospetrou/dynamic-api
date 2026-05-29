@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CHANNEL, formatRef, generateAppId, parseRef } from "./ref";
+import { DEFAULT_CHANNEL, formatRef, generateAppId, parseRef, verifyAppId } from "./ref";
 
-const ID = "3f2a4b5c6d7e8f90112233445566778e"; // 32 hex, hyphen-free
+const SECRET = "test-secret";
+const ID = "a7kp2mq9blt4bf3rhn8ol2qp1vuc5nd0sjm"; // 35 base32 (0-9a-v), hyphen-free
 
 describe("parseRef", () => {
   it("parses a bare id", () => {
@@ -78,11 +79,32 @@ describe("formatRef", () => {
   });
 });
 
-describe("generateAppId", () => {
-  it("produces hyphen-free ids that parseRef accepts as a bare appId", () => {
-    const id = generateAppId();
-    expect(id).not.toContain("-");
-    expect(id).not.toContain("@");
+describe("generateAppId / verifyAppId", () => {
+  it("produces hyphen-free 35-char base32 ids that parseRef accepts as a bare appId", async () => {
+    const id = await generateAppId(SECRET);
+    expect(id).toMatch(/^[0-9a-v]{35}$/);
     expect(parseRef(id)?.appId).toBe(id);
+  });
+
+  it("verifies an id it minted", async () => {
+    const id = await generateAppId(SECRET);
+    expect(await verifyAppId(SECRET, id)).toBe(true);
+  });
+
+  it("rejects a forged id (valid shape, bad tag)", async () => {
+    const id = await generateAppId(SECRET);
+    const forged = id.slice(0, 34) + (id[34] === "0" ? "1" : "0"); // flip last tag char
+    expect(await verifyAppId(SECRET, forged)).toBe(false);
+  });
+
+  it("rejects an id minted under a different secret", async () => {
+    const id = await generateAppId(SECRET);
+    expect(await verifyAppId("other-secret", id)).toBe(false);
+  });
+
+  it("rejects malformed ids without computing an HMAC", async () => {
+    expect(await verifyAppId(SECRET, "")).toBe(false);
+    expect(await verifyAppId(SECRET, "has-a-dash")).toBe(false);
+    expect(await verifyAppId(SECRET, ID.slice(0, 16))).toBe(false); // too short
   });
 });

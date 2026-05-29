@@ -11,14 +11,9 @@ import {
     UpdateAppSchema,
     UpdateVisibilitySchema,
 } from "./lib/schemas";
-import { generateAppId, parseRef } from "./lib/ref";
+import { generateAppId, parseRef, verifyAppId } from "./lib/ref";
 import { getOrRotateTestToken, verifyTestToken } from "./lib/testToken";
-import {
-    hashToken,
-    invalidateTokenCache,
-    TOKEN_KV_TTL_SECONDS,
-    verifyAppToken,
-} from "./lib/tokenCache";
+import { hashToken, invalidateTokenCache, TOKEN_KV_TTL_SECONDS, verifyAppToken } from "./lib/tokenCache";
 import type { RegistryAppRecord } from "./types";
 
 export { AppDO } from "./do/AppDO";
@@ -46,7 +41,7 @@ app.post("/api/apps", async (c) => {
     }
     const input = parsed.output;
 
-    const id = generateAppId();
+    const id = await generateAppId(c.env.APP_ID_SECRET);
     const slug = input.slug ?? id;
     const now = new Date().toISOString();
 
@@ -165,12 +160,7 @@ app.put("/api/apps/:id", async (c) => {
     // The DO owns the read-modify-write; expectedVersion guards against another
     // update having superseded the base we just generated from.
     const appStub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
-    const result = await appStub.updateVersion(
-        input.description,
-        code,
-        input.description,
-        existing.current.version,
-    );
+    const result = await appStub.updateVersion(input.description, code, input.description, existing.current.version);
     if (!result.ok) {
         if (result.reason === "conflict") {
             return c.json({ error: "App was updated concurrently, please retry" }, 409);
@@ -294,6 +284,14 @@ app.use("/apps/:id/*", async (c, next) => {
     const parsed = parseRef(c.req.param("id"));
     if (!parsed) return c.json({ error: "Not found" }, 404);
     const { appId } = parsed;
+
+    // Reject ids we never minted before touching KV or a Durable Object. The
+    // HMAC tag is unforgeable without APP_ID_SECRET, so garbage and enumeration
+    // attempts cost only pure CPU here. This middleware runs ahead of the
+    // `app.all` handler below, so that handler never resolves an unverified id.
+    if (!(await verifyAppId(c.env.APP_ID_SECRET, appId))) {
+        return c.json({ error: "Not found" }, 404);
+    }
 
     const record = await getAppRecord(c.env, appId);
     if (!record) return c.json({ error: "Not found" }, 404);
