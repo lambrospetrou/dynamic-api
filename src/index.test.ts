@@ -137,6 +137,7 @@ describe("appCache", () => {
       id: "cachetest",
       slug: "cache-test",
       description: "desc",
+      visibility: "private" as const,
       created_at: new Date().toISOString(),
       current: { version: 1, prompt: "p", code: "c", created_at: new Date().toISOString() },
     };
@@ -152,6 +153,7 @@ describe("appCache", () => {
       id: "versiontest",
       slug: "vt",
       description: "d",
+      visibility: "private" as const,
       created_at: new Date().toISOString(),
       current: { version: 5, prompt: "p", code: "c", created_at: new Date().toISOString() },
     };
@@ -201,7 +203,7 @@ describe("token management", () => {
     expect(mintRes.status).toBe(201);
     const minted = await mintRes.json<any>();
     expect(typeof minted.token).toBe("string");
-    expect(minted.token).toHaveLength(32);
+    expect(minted.token).toHaveLength(64);
     expect(minted.label).toBe("ci");
     expect(minted.token).not.toContain("-");
     const { id: tokenId, token } = minted;
@@ -268,6 +270,95 @@ describe("token management", () => {
     const { id: appId } = await createRes.json<any>();
     const res = await appFetch(`/api/apps/${appId}/tokens/doesnotexist`, { method: "DELETE" });
     expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Visibility & test token
+// ---------------------------------------------------------------------------
+
+describe("visibility", () => {
+  it("apps default to private and require a token", async () => {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+    const createRes = await jsonFetch("/api/apps", "POST", { description: "private app" });
+    const created = await createRes.json<any>();
+    expect(created.visibility).toBe("private");
+
+    const noAuth = await appFetch(`/apps/${created.id}/`);
+    expect(noAuth.status).toBe(401);
+  });
+
+  it("public apps are callable without a token", async () => {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+    const createRes = await jsonFetch("/api/apps", "POST", {
+      description: "public app",
+      visibility: "public",
+    });
+    const { id } = await createRes.json<any>();
+
+    const res = await appFetch(`/apps/${id}/`);
+    expect(res.status).not.toBe(401);
+
+    // Visibility is surfaced in the registry listing (for the list badge).
+    const { apps } = await (await appFetch("/api/apps")).json<any>();
+    expect(apps.find((a: any) => a.id === id)?.visibility).toBe("public");
+  });
+
+  it("PATCH toggles visibility and flips the auth requirement", async () => {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+    const createRes = await jsonFetch("/api/apps", "POST", { description: "toggle app" });
+    const { id } = await createRes.json<any>();
+
+    // private → 401 without token
+    expect((await appFetch(`/apps/${id}/`)).status).toBe(401);
+
+    const patchRes = await jsonFetch(`/api/apps/${id}`, "PATCH", { visibility: "public" });
+    expect(patchRes.status).toBe(200);
+    expect((await patchRes.json<any>()).visibility).toBe("public");
+
+    // public → no token needed
+    expect((await appFetch(`/apps/${id}/`)).status).not.toBe(401);
+
+    // back to private
+    await jsonFetch(`/api/apps/${id}`, "PATCH", { visibility: "private" });
+    expect((await appFetch(`/apps/${id}/`)).status).toBe(401);
+  });
+
+  it("rejects an invalid visibility value", async () => {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+    const createRes = await jsonFetch("/api/apps", "POST", { description: "bad patch" });
+    const { id } = await createRes.json<any>();
+    const res = await jsonFetch(`/api/apps/${id}`, "PATCH", { visibility: "everyone" });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("test token", () => {
+  it("exposes a recoverable test token that authenticates a private app", async () => {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+    const createRes = await jsonFetch("/api/apps", "POST", { description: "test token app" });
+    const { id } = await createRes.json<any>();
+
+    // Surfaced (in plaintext) on app details...
+    const detailRes = await appFetch(`/api/apps/${id}`);
+    const detail = await detailRes.json<any>();
+    expect(typeof detail.test_token.token).toBe("string");
+    expect(typeof detail.test_token.expires_at).toBe("string");
+
+    // ...and on the tokens list.
+    const listRes = await appFetch(`/api/apps/${id}/tokens`);
+    const list = await listRes.json<any>();
+    expect(list.test_token.token).toBe(detail.test_token.token);
+
+    // It authenticates the private app via both header and query param.
+    const tok = detail.test_token.token;
+    expect((await appFetch(`/apps/${id}/?token=${tok}`)).status).not.toBe(401);
+    expect(
+      (await appFetch(`/apps/${id}/`, { headers: { Authorization: `Bearer ${tok}` } })).status,
+    ).not.toBe(401);
+
+    // A wrong value is still rejected.
+    expect((await appFetch(`/apps/${id}/?token=nope`)).status).toBe(401);
   });
 });
 

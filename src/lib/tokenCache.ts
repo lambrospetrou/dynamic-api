@@ -3,6 +3,10 @@ import { BoundedCache } from "./boundedCache";
 const tokenCache = new BoundedCache<{ appId: string; cachedAt: number }>(1000);
 const CACHE_TTL_MS = 60_000;
 
+// KV entries for minted tokens are a cache of the authoritative Durable Object
+// record, so they carry a TTL and get re-populated on the next verified use.
+export const TOKEN_KV_TTL_SECONDS = 24 * 60 * 60;
+
 export async function hashToken(rawToken: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(rawToken));
   return Array.from(new Uint8Array(buf))
@@ -28,7 +32,7 @@ export async function verifyAppToken(env: Env, appId: string, rawToken: string):
   const valid = await stub.verifyTokenHash(hash);
   if (valid) {
     tokenCache.set(hash, { appId, cachedAt: Date.now() });
-    await env.APP_KV.put(`token:${hash}`, appId);
+    await env.APP_KV.put(`token:${hash}`, appId, { expirationTtl: TOKEN_KV_TTL_SECONDS });
   }
   return valid;
 }

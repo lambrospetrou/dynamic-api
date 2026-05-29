@@ -1,5 +1,7 @@
 import * as v from "valibot";
 
+export const VisibilitySchema = v.picklist(["private", "public"]);
+
 export const CreateAppSchema = v.object({
   slug: v.optional(
     v.pipe(
@@ -8,6 +10,11 @@ export const CreateAppSchema = v.object({
     ),
   ),
   description: v.pipe(v.string(), v.minLength(1), v.maxLength(4000)),
+  visibility: v.optional(VisibilitySchema, "private"),
+});
+
+export const UpdateVisibilitySchema = v.object({
+  visibility: VisibilitySchema,
 });
 
 export const UpdateAppSchema = v.object({
@@ -20,4 +27,5 @@ export const MintTokenSchema = v.object({
 
 export type CreateAppInput = v.InferOutput<typeof CreateAppSchema>;
 export type UpdateAppInput = v.InferOutput<typeof UpdateAppSchema>;
+export type UpdateVisibilityInput = v.InferOutput<typeof UpdateVisibilitySchema>;
 export type MintTokenInput = v.InferOutput<typeof MintTokenSchema>;

@@ -11,6 +11,7 @@ const MIGRATIONS: SQLSchemaMigration[] = [
         id              TEXT PRIMARY KEY,
         slug            TEXT NOT NULL,
         description     TEXT NOT NULL,
+        visibility      TEXT NOT NULL DEFAULT 'private',
         current_version INTEGER NOT NULL DEFAULT 1,
         last_updated    TEXT NOT NULL,
         created_at      TEXT NOT NULL
@@ -36,11 +37,12 @@ export class RegistryDO extends DurableObject {
   async upsertApp(record: RegistryAppRecord): Promise<void> {
     await this.#ensureSchema();
     this.ctx.storage.sql.exec(
-      `INSERT OR REPLACE INTO apps (id, slug, description, current_version, last_updated, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO apps (id, slug, description, visibility, current_version, last_updated, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       record.id,
       record.slug,
       record.description,
+      record.visibility,
       record.current_version,
       record.last_updated,
       record.created_at,
@@ -50,7 +52,7 @@ export class RegistryDO extends DurableObject {
   async listApps(): Promise<RegistryAppRecord[]> {
     await this.#ensureSchema();
     return this.ctx.storage.sql.exec<RegistryAppRecord>(
-      "SELECT id, slug, description, current_version, last_updated, created_at FROM apps ORDER BY created_at DESC",
+      "SELECT id, slug, description, visibility, current_version, last_updated, created_at FROM apps ORDER BY created_at DESC",
     ).toArray();
   }
 }

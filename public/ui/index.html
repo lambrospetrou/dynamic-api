@@ -175,6 +175,7 @@
             const loading = signal(false);
             const selectedApp = signal(null); // full AppRecord
             const appTokens = signal([]);
+            const testToken = signal(null); // { token, expires_at } — recoverable, auto-rotating
             const appHistory = signal([]);
             const activeTab = signal("detail"); // 'detail' | 'tokens' | 'history'
             const mintedToken = signal(null); // one-time display after minting
@@ -220,6 +221,7 @@
                     batch(() => {
                         selectedApp.value = app;
                         appTokens.value = tokens.tokens;
+                        testToken.value = app.test_token ?? tokens.test_token ?? null;
                         appHistory.value = history.history;
                         mintedToken.value = null;
                     });
@@ -243,9 +245,7 @@
                     setCopied(true);
                     setTimeout(() => setCopied(false), 1500);
                 }
-                return html`<button class="secondary outline" onClick=${copy}>
-                    ${copied ? "✓ Copied" : "Copy"}
-                </button>`;
+                return html`<button class="secondary outline" onClick=${copy}>${copied ? "✓ Copied" : "Copy"}</button>`;
             }
 
             // ── Create App Dialog ─────────────────────────────────────────────────────────
@@ -352,7 +352,12 @@
                                 ${list.map(
                                     (a) =>
                                         html` <li class="app-card" onClick=${() => openApp(a.id)} key=${a.id}>
-                                            <h3>${a.slug}<span class="badge">v${a.current_version}</span></h3>
+                                            <h3>
+                                                ${a.slug}<span class="badge">v${a.current_version}</span>
+                                                ${a.visibility === "public"
+                                                    ? html`<span class="badge">Public</span>`
+                                                    : html`<span class="badge">Private</span>`}
+                                            </h3>
                                             <p>${a.description}</p>
                                             <div class="meta">
                                                 ${a.id} · updated ${new Date(a.last_updated).toLocaleString()}
@@ -374,6 +379,23 @@
                 const [busy, setBusy] = useState(false);
                 const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
                 const [viewCode, setViewCode] = useState(false);
+                const [togglingVis, setTogglingVis] = useState(false);
+
+                async function toggleVisibility() {
+                    const next = app.visibility === "public" ? "private" : "public";
+                    setTogglingVis(true);
+                    try {
+                        const updated = await apiFetch(`/apps/${app.id}`, {
+                            method: "PATCH",
+                            body: JSON.stringify({ visibility: next }),
+                        });
+                        selectedApp.value = { ...app, visibility: updated.visibility };
+                    } catch (e) {
+                        globalError.value = e.message;
+                    } finally {
+                        setTogglingVis(false);
+                    }
+                }
 
                 function startEdit() {
                     setDesc(app.current.prompt);
@@ -413,6 +435,23 @@
                         <dd>${new Date(app.created_at).toLocaleString()}</dd>
                         <dt>Current version</dt>
                         <dd>v${app.current.version} · ${new Date(app.current.created_at).toLocaleString()}</dd>
+                        <dt>Visibility</dt>
+                        <dd>
+                            <span class="badge">${app.visibility === "public" ? "Public" : "Private"}</span>
+                            <button
+                                class="secondary outline"
+                                onClick=${toggleVisibility}
+                                disabled=${togglingVis}
+                                aria-busy=${togglingVis}
+                            >
+                                ${app.visibility === "public" ? "Make private" : "Make public"}
+                            </button>
+                            <br /><small class="muted"
+                                >${app.visibility === "public"
+                                    ? "Anyone can call this app — no token required."
+                                    : "A token is required to call this app."}</small
+                            >
+                        </dd>
                     </dl>
 
                     ${!editing
@@ -456,9 +495,30 @@
                         <pre>${app.current.code}</pre>
                     </details>
 
-                    <p style="margin-top:1.5rem">
-                        <small class="muted">Execution URL: <code>${location.origin}/apps/${app.id}/</code></small>
-                    </p>
+                    ${(() => {
+                        const base = `${location.origin}/apps/${app.id}/`;
+                        const isPublic = app.visibility === "public";
+                        const tok = testToken.value?.token;
+                        const testUrl = isPublic || !tok ? base : `${base}?token=${tok}`;
+                        return html`
+                            <h4>Quick test</h4>
+                            <small class="muted">
+                                ${isPublic
+                                    ? "This app is public — open it directly:"
+                                    : "Open with the auto-rotating test token (no need to mint a secret):"}
+                            </small>
+                            <div class="token-row">
+                                <code><a href=${testUrl} target="_blank" rel="noopener">${testUrl}</a></code>
+                                <${CopyButton} text=${testUrl} />
+                            </div>
+                            ${!isPublic &&
+                            testToken.value &&
+                            html`<small class="muted"
+                                >Test token rotates ~every 30 min · current one expires${" "}
+                                ${new Date(testToken.value.expires_at).toLocaleTimeString()}</small
+                            >`}
+                        `;
+                    })()}
                 </div>`;
             }
 
@@ -506,6 +566,16 @@
                 }
 
                 return html` <div>
+                    ${testToken.value &&
+                    html` <div>
+                        <h4>Test token</h4>
+                        <small class="muted"
+                            >Recoverable, auto-rotating (~30 min) token for manual testing. Expires${" "}
+                            ${new Date(testToken.value.expires_at).toLocaleTimeString()}.</small
+                        >
+                        <div class="token-value">${testToken.value.token}</div>
+                        <${CopyButton} text=${testToken.value.token} />
+                    </div>`}
                     ${mintedToken.value &&
                     html` <article style="border:1px solid var(--pico-primary);padding:1rem;margin-bottom:1.5rem">
                         <strong>Token created — copy it now, it won't be shown again.</strong>
@@ -606,10 +676,7 @@
                                             >${new Date(v.created_at).toLocaleString()}</small
                                         >
                                     </div>
-                                    <button
-                                        class="secondary outline"
-                                        onClick=${() => toggleVersion(v.version)}
-                                    >
+                                    <button class="secondary outline" onClick=${() => toggleVersion(v.version)}>
                                         ${expanded === v.version ? "Hide" : "View code"}
                                     </button>
                                 </div>
