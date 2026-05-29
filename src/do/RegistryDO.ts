@@ -49,6 +49,11 @@ export class RegistryDO extends DurableObject {
 		);
 	}
 
+	async deleteApp(id: string): Promise<void> {
+		await this.#ensureSchema();
+		this.ctx.storage.sql.exec("DELETE FROM apps WHERE id = ?", id);
+	}
+
 	async listApps(): Promise<RegistryAppRecord[]> {
 		await this.#ensureSchema();
 		return this.ctx.storage.sql

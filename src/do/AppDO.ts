@@ -312,6 +312,26 @@ export class AppDO extends DurableObject {
 			.toArray();
 		return rows.length > 0;
 	}
+
+	async getCleanupData(): Promise<{ tokenHashes: string[]; versions: number[] }> {
+		this.#ensureCtx();
+		await this.#ensureSchema();
+		const tokenHashes = this.ctx.storage.sql
+			.exec<{ token_hash: string }>("SELECT token_hash FROM app_tokens")
+			.toArray()
+			.map((r) => r.token_hash);
+		const versions = this.ctx.storage.sql
+			.exec<{ version: number }>("SELECT version FROM app_versions")
+			.toArray()
+			.map((r) => r.version);
+		return { tokenHashes, versions };
+	}
+
+	async destroy(): Promise<void> {
+		this.#ensureCtx();
+		await this.ctx.storage.deleteAll();
+		this.#instanceCtx = undefined;
+	}
 }
 
 function sqlMigrations(): SQLSchemaMigration[] {

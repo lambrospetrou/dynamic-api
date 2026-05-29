@@ -75,6 +75,16 @@ export function getAppRecordFresh(
 	return getAppRecord(env, appId, selector, { fresh: true });
 }
 
+export async function evictApp(env: Env, appId: string, versions: number[]): Promise<void> {
+	appCache.delete(`${appId}@${LATEST}`);
+	for (const v of versions) appCache.delete(`${appId}@${v}`);
+	await Promise.all([
+		env.APP_KV.delete(`app:${appId}`),
+		env.APP_KV.delete(`testtoken:${appId}`),
+		...versions.map((v) => env.APP_KV.delete(`app:${appId}@${v}`)),
+	]);
+}
+
 export async function writeAppRecord(env: Env, record: AppRecord): Promise<void> {
 	await env.APP_KV.put(`app:${record.id}`, JSON.stringify(record));
 	const key = `${record.id}@${LATEST}`;

@@ -481,6 +481,64 @@ describe("test token", () => {
 });
 
 // ---------------------------------------------------------------------------
+// App deletion
+// ---------------------------------------------------------------------------
+
+describe("DELETE /api/apps/:id", () => {
+	it("returns 404 for a garbage id", async () => {
+		const res = await appFetch("/api/apps/doesnotexist", { method: "DELETE" });
+		expect(res.status).toBe(404);
+	});
+
+	it("deletes app: 204, GET 404s, removed from listing, exec plane 404s, minted token no longer accepted", async () => {
+		vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+		const { id } = await jsonFetch("/api/apps", "POST", {
+			description: "app to delete",
+			visibility: "public",
+		}).then((r) => r.json<any>());
+
+		// Mint a token so we can verify it stops working post-delete.
+		const { token } = await jsonFetch(`/api/apps/${id}/tokens`, "POST", {}).then((r) =>
+			r.json<any>(),
+		);
+		expect((await appFetch(`/apps/${id}/`, { headers: { Authorization: `Bearer ${token}` } })).status).not.toBe(401);
+
+		const delRes = await appFetch(`/api/apps/${id}`, { method: "DELETE" });
+		expect(delRes.status).toBe(204);
+
+		expect((await appFetch(`/api/apps/${id}`)).status).toBe(404);
+		const { apps } = await appFetch("/api/apps").then((r) => r.json<any>());
+		expect(apps.some((a: any) => a.id === id)).toBe(false);
+		// Exec plane: app gone → 404 (not 401 — the auth check is never reached).
+		expect((await appFetch(`/apps/${id}/`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(404);
+	});
+
+	it("retries cleanly when the DO was already destroyed but the registry entry survived", async () => {
+		vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+		const { id } = await jsonFetch("/api/apps", "POST", { description: "partial delete app" }).then(
+			(r) => r.json<any>(),
+		);
+
+		// Reach inside and destroy the DO directly, leaving the registry entry
+		// intact — this is the exact storage state left behind when the DELETE
+		// handler crashes between stub.destroy() and registry.deleteApp().
+		await env.APP_DO.get(env.APP_DO.idFromName(id)).destroy();
+
+		// Registry still lists the app (the crash happened before that step).
+		const { apps: before } = await appFetch("/api/apps").then((r) => r.json<any>());
+		expect(before.some((a: any) => a.id === id)).toBe(true);
+
+		// Retry: handler sees null from getAppRecordFresh (DO gone), skips to
+		// registry.deleteApp() to finish the job.
+		const retryRes = await appFetch(`/api/apps/${id}`, { method: "DELETE" });
+		expect(retryRes.status).toBe(204);
+
+		const { apps: after } = await appFetch("/api/apps").then((r) => r.json<any>());
+		expect(after.some((a: any) => a.id === id)).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // URL prefix stripping
 // ---------------------------------------------------------------------------
 

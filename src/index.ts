@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import * as v from "valibot";
 import { tryWhile } from "durable-utils/retries";
-import { getAppRecord, getAppRecordFresh, writeAppRecord } from "./lib/appCache";
+import { evictApp, getAppRecord, getAppRecordFresh, writeAppRecord } from "./lib/appCache";
 import { generateCode } from "./lib/codegen";
 import {
 	ChannelNameSchema,
@@ -195,6 +195,29 @@ app.put("/api/apps/:id", async (c) => {
 	);
 
 	return c.json(appRecord);
+});
+
+app.delete("/api/apps/:id", async (c) => {
+	const appId = c.req.param("id");
+	if (!(await verifyAppId(c.env.APP_ID_SECRET, appId))) {
+		return c.json({ error: "Not found" }, 404);
+	}
+
+	const existing = await getAppRecordFresh(c.env, appId);
+	if (existing) {
+		const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
+		const { tokenHashes, versions } = await stub.getCleanupData();
+		await Promise.all([
+			evictApp(c.env, existing.id, versions),
+			...tokenHashes.map((h) => invalidateTokenCache(c.env, h)),
+		]);
+		await stub.destroy();
+	}
+
+	const registry = c.env.REGISTRY_DO.get(c.env.REGISTRY_DO.idFromName("default"));
+	await registry.deleteApp(appId);
+
+	return new Response(null, { status: 204 });
 });
 
 app.get("/api/apps/:id/history", async (c) => {
