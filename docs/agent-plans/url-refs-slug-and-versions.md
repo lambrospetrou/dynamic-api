@@ -1,6 +1,6 @@
 # Plan: Vanity slugs + version-addressable URLs for `/apps/...`
 
-Status: Phase 1 implemented; Phase 2 proposed
+Status: Phase 1 & Phase 2 implemented
 Date: 2026-05-29
 Scope: `src/index.ts`, `src/lib/*`, `src/do/AppDO.ts`, `public/ui/index.html`, `src/index.test.ts`
 
@@ -231,6 +231,35 @@ management endpoints that legitimately want newest (create/update flows).
 - `resolveVersion` matrix: numeric / latest / channel / default-fallback / unknown.
 - Exec routing for `@7`, `@latest`, `@active`, and bare (default).
 - Promote endpoint moves what bare/`@active` serves.
+
+## Phase 3 — Read consistency for the management plane
+
+Workers KV GETs sit behind an edge read cache (>=60s default, floor ~30s even
+with an explicit `cacheTtl`). Combined with the 60s in-memory layer, a `LATEST`
+read can lag a write by up to ~the KV cacheTtl — the `put` in `writeAppRecord`
+does not punch through a read cache already warm in another POP/isolate. Fine
+for the execution plane (serving code is allowed to be eventually consistent),
+but wrong for the management plane, where `PUT` regenerates a new version from
+the *current* code as its base.
+
+- **Authoritative reads** — `getAppRecord(env, appId, selector, { fresh })`
+  bypasses memory + KV and reads the DO directly; `getAppRecordFresh(...)` is the
+  convenience wrapper. Every `/api/apps/...` handler uses the fresh path; the
+  execution-plane middleware/executor stay on the cached path. Fresh reads still
+  repopulate the caches for later exec reads.
+- **DO owns the patch** — codegen stays in the Worker (a multi-second
+  `env.AI` call must not hold a Durable Object open and serialize all access to
+  it). The Worker does a fresh read for the base code, generates, then hands the
+  finished code to `AppDO.updateVersion(description, code, prompt, expectedVersion)`.
+  The DO patches `app_meta.description` and inserts the next version with no
+  intervening await (race-free numbering — it already did this), and the handler
+  no longer passes `id`/`slug` the DO already holds.
+- **Optimistic concurrency** — `expectedVersion` is the base the code was
+  generated from; if a newer version landed meanwhile the DO returns
+  `{ ok: false, reason: "conflict" }` and `PUT` responds `409`. `notfound` → 404.
+  (Only meaningful now that the base read is authoritative.)
+- `createVersion` remains the initial-create path (POST); `updateVersion` is the
+  subsequent-version path (PUT).
 
 ## Invariants to guard
 

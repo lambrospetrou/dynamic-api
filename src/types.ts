@@ -37,6 +37,14 @@ export type AppToken = {
   created_at: string;
 };
 
+// A named release channel pointing at a specific version. `latest` is virtual
+// (always MAX(version)) and is never stored here.
+export type AppChannel = {
+  name: string;
+  version: number;
+  updated_at: string;
+};
+
 // A recoverable, auto-rotating token surfaced to the (Cloudflare Access-protected)
 // owner for quick manual testing. Unlike AppToken it is stored in plaintext and
 // has a short lifetime — see src/lib/testToken.ts.

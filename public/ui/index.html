@@ -177,7 +177,8 @@
             const appTokens = signal([]);
             const testToken = signal(null); // { token, expires_at } — recoverable, auto-rotating
             const appHistory = signal([]);
-            const activeTab = signal("detail"); // 'detail' | 'tokens' | 'history'
+            const appChannels = signal([]); // [{ name, version, updated_at }]
+            const activeTab = signal("detail"); // 'detail' | 'tokens' | 'channels' | 'history'
             const mintedToken = signal(null); // one-time display after minting
             const globalError = signal(null);
 
@@ -213,16 +214,18 @@
             async function loadApp(id) {
                 loading.value = true;
                 try {
-                    const [app, tokens, history] = await Promise.all([
+                    const [app, tokens, history, channels] = await Promise.all([
                         apiFetch(`/apps/${id}`),
                         apiFetch(`/apps/${id}/tokens`),
                         apiFetch(`/apps/${id}/history`),
+                        apiFetch(`/apps/${id}/channels`),
                     ]);
                     batch(() => {
                         selectedApp.value = app;
                         appTokens.value = tokens.tokens;
                         testToken.value = app.test_token ?? tokens.test_token ?? null;
                         appHistory.value = history.history;
+                        appChannels.value = channels.channels;
                         mintedToken.value = null;
                     });
                 } catch (e) {
@@ -635,6 +638,81 @@
                 </div>`;
             }
 
+            // ── Channels Tab ──────────────────────────────────────────────────────────────
+            function ChannelsTab() {
+                const app = selectedApp.value;
+                const channels = appChannels.value;
+                const latest = app.current.version;
+                const [name, setName] = useState("active");
+                const [version, setVersion] = useState(String(latest));
+                const [busy, setBusy] = useState(false);
+                const [err, setErr] = useState("");
+
+                async function promote(e) {
+                    e.preventDefault();
+                    setBusy(true);
+                    setErr("");
+                    try {
+                        await apiFetch(`/apps/${app.id}/channels/${name.trim()}`, {
+                            method: "PUT",
+                            body: JSON.stringify({ version: Number(version) }),
+                        });
+                        appChannels.value = (await apiFetch(`/apps/${app.id}/channels`)).channels;
+                    } catch (e) {
+                        setErr(e.message);
+                    } finally {
+                        setBusy(false);
+                    }
+                }
+
+                return html` <div>
+                    <small class="muted">
+                        Channels are named pointers to a version. A bare app URL resolves to the
+                        <code>active</code> channel (falling back to the latest version until you promote one).
+                        Address any channel or version explicitly with
+                        <code>${"/apps/<id>@<channel|version|latest>/"}</code>.
+                    </small>
+
+                    ${channels.length === 0
+                        ? html`<p class="empty">No channels yet — bare URLs serve the latest version (v${latest}).</p>`
+                        : html`<table>
+                              <thead>
+                                  <tr><th>Channel</th><th>Version</th><th>Updated</th></tr>
+                              </thead>
+                              <tbody>
+                                  ${channels.map(
+                                      (ch) =>
+                                          html`<tr key=${ch.name}>
+                                              <td><code>${ch.name}</code></td>
+                                              <td>v${ch.version}</td>
+                                              <td><small class="muted">${new Date(ch.updated_at).toLocaleString()}</small></td>
+                                          </tr>`,
+                                  )}
+                              </tbody>
+                          </table>`}
+
+                    <form onSubmit=${promote} style="margin-top:1rem">
+                        <h4 style="margin-bottom:0.5rem">Promote a version</h4>
+                        <div style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap">
+                            <label style="margin:0">
+                                Channel
+                                <input type="text" value=${name} onInput=${(e) => setName(e.target.value)} placeholder="active" />
+                            </label>
+                            <label style="margin:0">
+                                Version
+                                <select value=${version} onChange=${(e) => setVersion(e.target.value)}>
+                                    ${appHistory.value.map(
+                                        (v) => html`<option value=${String(v.version)} key=${v.version}>v${v.version}</option>`,
+                                    )}
+                                </select>
+                            </label>
+                            <button type="submit" disabled=${busy} aria-busy=${busy}>Promote</button>
+                        </div>
+                        ${err && html`<p class="error">${err}</p>`}
+                    </form>
+                </div>`;
+            }
+
             // ── History Tab ───────────────────────────────────────────────────────────────
             function HistoryTab() {
                 const app = selectedApp.value;
@@ -712,6 +790,7 @@
                 const tabs = [
                     { id: "detail", label: "Details" },
                     { id: "tokens", label: "Tokens" },
+                    { id: "channels", label: `Channels (${appChannels.value.length})` },
                     { id: "history", label: `History (${appHistory.value.length})` },
                 ];
 
@@ -740,6 +819,7 @@
 
                     ${activeTab.value === "detail" && html`<${DetailTab} />`}
                     ${activeTab.value === "tokens" && html`<${TokensTab} />`}
+                    ${activeTab.value === "channels" && html`<${ChannelsTab} />`}
                     ${activeTab.value === "history" && html`<${HistoryTab} />`}
                 </div>`;
             }

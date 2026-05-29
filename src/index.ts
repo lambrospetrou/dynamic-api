@@ -1,9 +1,16 @@
 import { Hono } from "hono";
 import * as v from "valibot";
 import { tryWhile } from "durable-utils/retries";
-import { getAppRecord, writeAppRecord } from "./lib/appCache";
+import { getAppRecord, getAppRecordFresh, writeAppRecord } from "./lib/appCache";
 import { generateCode } from "./lib/codegen";
-import { CreateAppSchema, MintTokenSchema, UpdateAppSchema, UpdateVisibilitySchema } from "./lib/schemas";
+import {
+    ChannelNameSchema,
+    CreateAppSchema,
+    MintTokenSchema,
+    SetChannelSchema,
+    UpdateAppSchema,
+    UpdateVisibilitySchema,
+} from "./lib/schemas";
 import { generateAppId, parseRef } from "./lib/ref";
 import { getOrRotateTestToken, verifyTestToken } from "./lib/testToken";
 import {
@@ -102,7 +109,7 @@ app.post("/api/apps", async (c) => {
 });
 
 app.get("/api/apps/:id", async (c) => {
-    const record = await getAppRecord(c.env, c.req.param("id"));
+    const record = await getAppRecordFresh(c.env, c.req.param("id"));
     if (!record) return c.json({ error: "Not found" }, 404);
     const test_token = await getOrRotateTestToken(c.env, record.id);
     return c.json({ ...record, test_token });
@@ -112,7 +119,7 @@ app.patch("/api/apps/:id", async (c) => {
     const parsed = v.safeParse(UpdateVisibilitySchema, await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: v.flatten(parsed.issues) }, 400);
 
-    const existing = await getAppRecord(c.env, c.req.param("id"));
+    const existing = await getAppRecordFresh(c.env, c.req.param("id"));
     if (!existing) return c.json({ error: "Not found" }, 404);
 
     const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
@@ -143,7 +150,9 @@ app.put("/api/apps/:id", async (c) => {
     }
     const input = parsed.output;
 
-    const existing = await getAppRecord(c.env, c.req.param("id"));
+    // Authoritative read: the generated code is a patch on top of this exact
+    // base, so it must not be a stale cached snapshot.
+    const existing = await getAppRecordFresh(c.env, c.req.param("id"));
     if (!existing) return c.json({ error: "Not found" }, 404);
 
     let code: string;
@@ -153,14 +162,22 @@ app.put("/api/apps/:id", async (c) => {
         return c.json({ error: String(err) }, 422);
     }
 
+    // The DO owns the read-modify-write; expectedVersion guards against another
+    // update having superseded the base we just generated from.
     const appStub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
-    const appRecord = await appStub.createVersion(
-        existing.id,
-        existing.slug,
+    const result = await appStub.updateVersion(
         input.description,
         code,
         input.description,
+        existing.current.version,
     );
+    if (!result.ok) {
+        if (result.reason === "conflict") {
+            return c.json({ error: "App was updated concurrently, please retry" }, 409);
+        }
+        return c.json({ error: "Not found" }, 404);
+    }
+    const appRecord = result.record;
     await writeAppRecord(c.env, appRecord);
 
     const registryId = c.env.REGISTRY_DO.idFromName("default");
@@ -181,7 +198,7 @@ app.put("/api/apps/:id", async (c) => {
 });
 
 app.get("/api/apps/:id/history", async (c) => {
-    const existing = await getAppRecord(c.env, c.req.param("id"));
+    const existing = await getAppRecordFresh(c.env, c.req.param("id"));
     if (!existing) return c.json({ error: "Not found" }, 404);
     const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
     const history = await stub.getHistory();
@@ -189,7 +206,7 @@ app.get("/api/apps/:id/history", async (c) => {
 });
 
 app.get("/api/apps/:id/history/:version", async (c) => {
-    const existing = await getAppRecord(c.env, c.req.param("id"));
+    const existing = await getAppRecordFresh(c.env, c.req.param("id"));
     if (!existing) return c.json({ error: "Not found" }, 404);
     const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
     const version = await stub.getVersion(Number(c.req.param("version")));
@@ -198,11 +215,39 @@ app.get("/api/apps/:id/history/:version", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// Release channels
+// ---------------------------------------------------------------------------
+
+app.get("/api/apps/:id/channels", async (c) => {
+    const existing = await getAppRecordFresh(c.env, c.req.param("id"));
+    if (!existing) return c.json({ error: "Not found" }, 404);
+    const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
+    const channels = await stub.listChannels();
+    return c.json({ channels });
+});
+
+app.put("/api/apps/:id/channels/:name", async (c) => {
+    const name = v.safeParse(ChannelNameSchema, c.req.param("name"));
+    if (!name.success) return c.json({ error: v.flatten(name.issues) }, 400);
+
+    const body = v.safeParse(SetChannelSchema, await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ error: v.flatten(body.issues) }, 400);
+
+    const existing = await getAppRecordFresh(c.env, c.req.param("id"));
+    if (!existing) return c.json({ error: "Not found" }, 404);
+
+    const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
+    const channel = await stub.setChannel(name.output, body.output.version);
+    if (!channel) return c.json({ error: "Version not found" }, 404);
+    return c.json(channel);
+});
+
+// ---------------------------------------------------------------------------
 // Token management
 // ---------------------------------------------------------------------------
 
 app.post("/api/apps/:id/tokens", async (c) => {
-    const existing = await getAppRecord(c.env, c.req.param("id"));
+    const existing = await getAppRecordFresh(c.env, c.req.param("id"));
     if (!existing) return c.json({ error: "Not found" }, 404);
 
     const parsed = v.safeParse(MintTokenSchema, await c.req.json().catch(() => ({})));
@@ -221,7 +266,7 @@ app.post("/api/apps/:id/tokens", async (c) => {
 });
 
 app.get("/api/apps/:id/tokens", async (c) => {
-    const existing = await getAppRecord(c.env, c.req.param("id"));
+    const existing = await getAppRecordFresh(c.env, c.req.param("id"));
     if (!existing) return c.json({ error: "Not found" }, 404);
     const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
     const tokens = await stub.listTokens();
@@ -230,7 +275,7 @@ app.get("/api/apps/:id/tokens", async (c) => {
 });
 
 app.delete("/api/apps/:id/tokens/:tokenId", async (c) => {
-    const existing = await getAppRecord(c.env, c.req.param("id"));
+    const existing = await getAppRecordFresh(c.env, c.req.param("id"));
     if (!existing) return c.json({ error: "Not found" }, 404);
     const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
     const tokenHash = await stub.getTokenHash(c.req.param("tokenId"));
@@ -269,12 +314,12 @@ app.use("/apps/:id/*", async (c, next) => {
 app.all("/apps/:id/*", async (c) => {
     const parsed = parseRef(c.req.param("id"));
     if (!parsed) return c.json({ error: "Not found" }, 404);
-    const { appId } = parsed;
+    const { appId, resolvedSelector } = parsed;
 
-    const appRecord = await getAppRecord(c.env, appId);
+    const appRecord = await getAppRecord(c.env, appId, resolvedSelector);
     if (!appRecord) return c.json({ error: "Not found" }, 404);
 
-    const cacheKey = `${appRecord.id}_${appRecord.current.created_at}`;
+    const cacheKey = `${appRecord.id}_v${appRecord.current.version}`;
     const stub = c.env.LOADER.get(cacheKey, () => ({
         compatibilityDate: "2026-05-27",
         compatibilityFlags: ["nodejs_compat"],

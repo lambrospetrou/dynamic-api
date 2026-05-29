@@ -166,6 +166,104 @@ describe("appCache", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Release channels & version selectors
+// ---------------------------------------------------------------------------
+
+describe("channels & version selectors", () => {
+  // Create a public app and bump it to version 2; returns its id.
+  async function makeTwoVersionApp() {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+    const createRes = await jsonFetch("/api/apps", "POST", {
+      description: "channel app",
+      visibility: "public",
+    });
+    const { id } = await createRes.json<any>();
+    await jsonFetch(`/api/apps/${id}`, "PUT", { description: "v2" });
+    return id as string;
+  }
+
+  it("AppDO.resolve maps selectors to versions", async () => {
+    const id = await makeTwoVersionApp();
+    const stub = env.APP_DO.get(env.APP_DO.idFromName(id));
+
+    expect((await stub.resolve("1"))?.current.version).toBe(1);
+    expect((await stub.resolve("2"))?.current.version).toBe(2);
+    expect((await stub.resolve("latest"))?.current.version).toBe(2);
+    expect(await stub.resolve("99")).toBeNull(); // missing version
+    expect(await stub.resolve("active")).not.toBeNull(); // default channel falls back to latest
+    expect((await stub.resolve("active"))?.current.version).toBe(2);
+    expect(await stub.resolve("production")).toBeNull(); // unset non-default channel
+  });
+
+  it("promotes a channel and lists it; the channel then resolves to that version", async () => {
+    const id = await makeTwoVersionApp();
+    const stub = env.APP_DO.get(env.APP_DO.idFromName(id));
+
+    // No channels until promoted.
+    const before = await (await appFetch(`/api/apps/${id}/channels`)).json<any>();
+    expect(before.channels).toHaveLength(0);
+
+    // Pin active to v1.
+    const setRes = await jsonFetch(`/api/apps/${id}/channels/active`, "PUT", { version: 1 });
+    expect(setRes.status).toBe(200);
+    expect((await setRes.json<any>()).version).toBe(1);
+
+    const after = await (await appFetch(`/api/apps/${id}/channels`)).json<any>();
+    expect(after.channels).toEqual([expect.objectContaining({ name: "active", version: 1 })]);
+
+    // Resolution now follows the channel pointer, not latest.
+    expect((await stub.resolve("active"))?.current.version).toBe(1);
+  });
+
+  it("rejects promoting to a non-existent version", async () => {
+    const id = await makeTwoVersionApp();
+    const res = await jsonFetch(`/api/apps/${id}/channels/active`, "PUT", { version: 99 });
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects the reserved channel name and invalid names", async () => {
+    const id = await makeTwoVersionApp();
+    expect((await jsonFetch(`/api/apps/${id}/channels/latest`, "PUT", { version: 1 })).status).toBe(400);
+    expect((await jsonFetch(`/api/apps/${id}/channels/UPPER`, "PUT", { version: 1 })).status).toBe(400);
+  });
+
+  it("routes the exec plane by selector (404 for unknown version)", async () => {
+    const id = await makeTwoVersionApp();
+    // Public app, so a resolvable selector is not a 401/404.
+    expect((await appFetch(`/apps/${id}@1/`)).status).not.toBe(404);
+    expect((await appFetch(`/apps/${id}@latest/`)).status).not.toBe(404);
+    // Unknown version → 404 from the executor.
+    expect((await appFetch(`/apps/${id}@99/`)).status).toBe(404);
+    // Unset non-default channel → 404.
+    expect((await appFetch(`/apps/${id}@production/`)).status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Update flow (DO-owned patch + optimistic concurrency)
+// ---------------------------------------------------------------------------
+
+describe("AppDO.updateVersion", () => {
+  it("appends a version, patches the description, and guards on expectedVersion", async () => {
+    vi.mocked(generateCode).mockResolvedValue(DUMMY_CODE);
+    const createRes = await jsonFetch("/api/apps", "POST", { description: "v1 desc" });
+    const { id } = await createRes.json<any>();
+    const stub = env.APP_DO.get(env.APP_DO.idFromName(id));
+
+    // Stale base → conflict, no new version written.
+    const conflict = await stub.updateVersion("v2 desc", DUMMY_CODE, "v2 desc", 99);
+    expect(conflict).toEqual({ ok: false, reason: "conflict" });
+    expect((await stub.getCurrent())?.current.version).toBe(1);
+
+    // Correct base → new version, description patched on app_meta.
+    const ok = await stub.updateVersion("v2 desc", DUMMY_CODE, "v2 desc", 1);
+    expect(ok.ok).toBe(true);
+    expect(ok.ok && ok.record.current.version).toBe(2);
+    expect(ok.ok && ok.record.description).toBe("v2 desc");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Code validation (unit)
 // ---------------------------------------------------------------------------
 
