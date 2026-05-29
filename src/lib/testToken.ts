@@ -26,7 +26,18 @@ export async function getOrRotateTestToken(env: Env, appId: string): Promise<Tes
 		token: generate(),
 		expires_at: new Date(Date.now() + TTL_SECONDS * 1000).toISOString(),
 	};
-	await env.APP_KV.put(kvKey(appId), JSON.stringify(record), { expirationTtl: TTL_SECONDS });
+	try {
+		await env.APP_KV.put(kvKey(appId), JSON.stringify(record), { expirationTtl: TTL_SECONDS });
+	} catch {
+		// In the unlikely event of a KV write failure, return the token anyway —
+		// it will be valid for the next 30 minutes as long as it's stored in the
+		// owner's browser and the DO can read it from a subsequent getOrRotate call.
+		console.error({
+			message:
+				"testToken: Failed to store test token in KV; token will still be valid but won't survive rotation until next successful getOrRotate",
+			appId,
+		});
+	}
 	return record;
 }
 

@@ -3,6 +3,12 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-05-27",
 	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"logs": {
+			"enabled": true,
+			"invocation_logs": false,
+		},
+	},
 	"workers_dev": false,
 	"routes": [
 		{

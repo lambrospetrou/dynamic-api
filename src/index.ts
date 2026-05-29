@@ -335,14 +335,14 @@ app.use("/apps/:id/*", async (c, next) => {
 
 	const rawToken =
 		c.req.header("authorization")?.replace(/^Bearer\s+/i, "") ?? c.req.query("token");
-	if (!rawToken) return c.json({ error: "Unauthorized" }, 401);
+	if (!rawToken) return c.json({ error: "Unauthorized, no token provided" }, 401);
 
 	// Minted (hashed) tokens are the common path; the recoverable test token is a
 	// fallback so the owner can click an app URL without managing a secret.
 	const valid =
 		(await verifyAppToken(c.env, appId, rawToken)) ||
 		(await verifyTestToken(c.env, appId, rawToken));
-	if (!valid) return c.json({ error: "Unauthorized" }, 401);
+	if (!valid) return c.json({ error: "Unauthorized, invalid token" }, 401);
 	return next();
 });
 
