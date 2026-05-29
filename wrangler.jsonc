@@ -2,7 +2,14 @@
     "name": "dynamic-api",
     "main": "src/index.ts",
     "compatibility_date": "2026-05-27",
-    "compatibility_flags": ["nodejs_compat", "experimental"],
+    "compatibility_flags": ["nodejs_compat"],
+    "workers_dev": false,
+    "routes": [
+        {
+            "pattern": "dynamic.lambros.dev",
+            "custom_domain": true,
+        },
+    ],
     "assets": {
         "directory": "public",
         "binding": "ASSETS",
