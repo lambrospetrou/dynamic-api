@@ -3,65 +3,48 @@ import { SQLSchemaMigrations, type SQLSchemaMigration } from "durable-utils/sql-
 import { DEFAULT_CHANNEL, LATEST } from "../lib/ref";
 import type { AppChannel, AppCtx, AppRecord, AppToken, AppVersion, Visibility } from "../types";
 
-const MIGRATIONS: SQLSchemaMigration[] = [
-    {
-        idMonotonicInc: 1,
-        description: "initial schema",
-        sql: `
-      CREATE TABLE IF NOT EXISTS app_meta (
-        id TEXT PRIMARY KEY,
-        slug TEXT NOT NULL UNIQUE,
-        description TEXT NOT NULL,
-        visibility TEXT NOT NULL DEFAULT 'private',
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS app_versions (
-        version INTEGER NOT NULL PRIMARY KEY,
-        prompt TEXT NOT NULL,
-        code TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS app_tokens (
-        id TEXT PRIMARY KEY,
-        token_hash TEXT NOT NULL UNIQUE,
-        label TEXT,
-        created_at TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_app_meta_created_at ON app_meta(created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_app_versions_created_at ON app_versions(created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_app_tokens_hash ON app_tokens(token_hash);
-    `,
-    },
-    {
-        idMonotonicInc: 2,
-        description: "release channels",
-        sql: `
-      CREATE TABLE IF NOT EXISTS app_channels (
-        name       TEXT PRIMARY KEY,
-        version    INTEGER NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-    `,
-    },
-];
-
 export class AppDO extends DurableObject {
     #migrations: SQLSchemaMigrations;
 
+    // The appId/workspace this DO was initialized for, loaded from storage on
+    // construction. Undefined until init() has run. Every RPC except init()
+    // asserts this is set via #ensureCtx(), so an un-provisioned DO hit directly
+    // (bypassing the appId check in the middleware) refuses to do any work.
+    #instanceCtx: AppCtx | undefined;
+
     constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
-        this.#migrations = new SQLSchemaMigrations({ doStorage: ctx.storage, migrations: MIGRATIONS });
+        this.#migrations = new SQLSchemaMigrations({ doStorage: ctx.storage, migrations: sqlMigrations() });
+        // Hydrate the in-memory context synchronously via the KV storage API so
+        // every RPC sees a fully constructed instance without an async barrier.
+        this.#instanceCtx = ctx.storage.kv.get<AppCtx>("appCtx");
     }
 
     async #ensureSchema() {
         await this.#migrations.runAll();
     }
 
-    async init(appId: string, workspace: string): Promise<void> {
-        const existing = await this.ctx.storage.get<AppCtx>("appCtx");
-        if (!existing) {
-            await this.ctx.storage.put("appCtx", { appId, workspace });
+    // Assert this DO has been provisioned with an appId/workspace. Throws when
+    // the DO was reached without a prior init(), e.g. by addressing it directly.
+    #ensureCtx(): AppCtx {
+        if (!this.#instanceCtx) {
+            throw new Error("AppDO: not initialized; init() must be called before any other operation");
         }
+        return this.#instanceCtx;
+    }
+
+    async init(appId: string, workspace: string): Promise<void> {
+        if (this.#instanceCtx) {
+            if (this.#instanceCtx.appId !== appId || this.#instanceCtx.workspace !== workspace) {
+                throw new Error(
+                    `AppDO: init mismatch; already initialized for appId=${this.#instanceCtx.appId} workspace=${this.#instanceCtx.workspace}`,
+                );
+            }
+            return;
+        }
+        const instanceCtx: AppCtx = { appId, workspace };
+        this.ctx.storage.kv.put("appCtx", instanceCtx);
+        this.#instanceCtx = instanceCtx;
     }
 
     async createVersion(
@@ -71,6 +54,7 @@ export class AppDO extends DurableObject {
         code: string,
         prompt: string,
     ): Promise<AppRecord> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         const now = new Date().toISOString();
 
@@ -100,20 +84,13 @@ export class AppDO extends DurableObject {
         return record;
     }
 
-    // Append a new version to an existing app. The DO owns the read-modify-write:
-    // it patches the description, computes the next version number, and inserts —
-    // all without an intervening await, so version numbering is race-free. When
-    // `expectedVersion` is given it acts as an optimistic-concurrency guard: the
-    // caller generated the new code from that base, so a newer version landing in
-    // the meantime is reported as a conflict rather than silently superseded.
     async updateVersion(
         description: string,
         code: string,
         prompt: string,
         expectedVersion?: number,
-    ): Promise<
-        { ok: true; record: AppRecord } | { ok: false; reason: "notfound" | "conflict" }
-    > {
+    ): Promise<{ ok: true; record: AppRecord } | { ok: false; reason: "notfound" | "conflict" }> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         const max = this.#maxVersion();
         if (max === null) return { ok: false, reason: "notfound" };
@@ -138,6 +115,7 @@ export class AppDO extends DurableObject {
     }
 
     async setVisibility(visibility: Visibility): Promise<AppRecord | null> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         this.ctx.storage.sql.exec("UPDATE app_meta SET visibility = ?", visibility);
         return this.getCurrent();
@@ -185,9 +163,7 @@ export class AppDO extends DurableObject {
     }
 
     #maxVersion(): number | null {
-        const v = this.ctx.storage.sql.exec("SELECT MAX(version) AS v FROM app_versions").one().v as
-            | number
-            | null;
+        const v = this.ctx.storage.sql.exec("SELECT MAX(version) AS v FROM app_versions").one().v as number | null;
         return v ?? null;
     }
 
@@ -213,6 +189,7 @@ export class AppDO extends DurableObject {
     // Resolve a selector to the served AppRecord. Returns null when the selector
     // points at a non-existent version or unset channel.
     async resolve(selector: string): Promise<AppRecord | null> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         const version = this.#resolveVersionNumber(selector);
         if (version === null) return null;
@@ -220,6 +197,7 @@ export class AppDO extends DurableObject {
     }
 
     async getCurrent(): Promise<AppRecord | null> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         const version = this.#maxVersion();
         if (version === null) return null;
@@ -227,6 +205,7 @@ export class AppDO extends DurableObject {
     }
 
     async setChannel(name: string, version: number): Promise<AppChannel | null> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         if (this.#recordAt(version) === null) return null; // version must exist
         const now = new Date().toISOString();
@@ -241,6 +220,7 @@ export class AppDO extends DurableObject {
     }
 
     async listChannels(): Promise<AppChannel[]> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         return this.ctx.storage.sql
             .exec<AppChannel>("SELECT name, version, updated_at FROM app_channels ORDER BY name ASC")
@@ -248,6 +228,7 @@ export class AppDO extends DurableObject {
     }
 
     async getHistory(): Promise<AppVersion[]> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         return this.ctx.storage.sql
             .exec<{
@@ -260,6 +241,7 @@ export class AppDO extends DurableObject {
     }
 
     async getVersion(version: number): Promise<AppVersion | null> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         const rows = this.ctx.storage.sql
             .exec<{
@@ -273,6 +255,7 @@ export class AppDO extends DurableObject {
     }
 
     async mintToken(tokenHash: string, label: string | null): Promise<AppToken> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         const id = crypto.randomUUID().replaceAll("-", "");
         const now = new Date().toISOString();
@@ -287,6 +270,7 @@ export class AppDO extends DurableObject {
     }
 
     async listTokens(): Promise<AppToken[]> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         return this.ctx.storage.sql
             .exec<AppToken>("SELECT id, label, created_at FROM app_tokens ORDER BY created_at DESC")
@@ -294,6 +278,7 @@ export class AppDO extends DurableObject {
     }
 
     async getTokenHash(tokenId: string): Promise<string | null> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         const rows = this.ctx.storage.sql
             .exec<{ token_hash: string }>("SELECT token_hash FROM app_tokens WHERE id = ?", tokenId)
@@ -304,6 +289,7 @@ export class AppDO extends DurableObject {
 
     // Returns the token_hash of the deleted token (for cache invalidation), or null if not found.
     async revokeToken(tokenId: string): Promise<string | null> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         const rows = this.ctx.storage.sql
             .exec<{ token_hash: string }>("SELECT token_hash FROM app_tokens WHERE id = ?", tokenId)
@@ -314,10 +300,55 @@ export class AppDO extends DurableObject {
     }
 
     async verifyTokenHash(tokenHash: string): Promise<boolean> {
+        this.#ensureCtx();
         await this.#ensureSchema();
         const rows = this.ctx.storage.sql
             .exec<{ id: string }>("SELECT id FROM app_tokens WHERE token_hash = ?", tokenHash)
             .toArray();
         return rows.length > 0;
     }
+}
+
+function sqlMigrations(): SQLSchemaMigration[] {
+    return [
+        {
+            idMonotonicInc: 1,
+            description: "initial schema",
+            sql: `
+      CREATE TABLE IF NOT EXISTS app_meta (
+        id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL,
+        visibility TEXT NOT NULL DEFAULT 'private',
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS app_versions (
+        version INTEGER NOT NULL PRIMARY KEY,
+        prompt TEXT NOT NULL,
+        code TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS app_tokens (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL UNIQUE,
+        label TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_app_meta_created_at ON app_meta(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_app_versions_created_at ON app_versions(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_app_tokens_hash ON app_tokens(token_hash);
+    `,
+        },
+        {
+            idMonotonicInc: 2,
+            description: "release channels",
+            sql: `
+      CREATE TABLE IF NOT EXISTS app_channels (
+        name       TEXT PRIMARY KEY,
+        version    INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `,
+        },
+    ];
 }
