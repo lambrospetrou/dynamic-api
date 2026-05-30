@@ -7,7 +7,33 @@ The code must:
 - Use only Web Standard APIs (Request, Response, URL, Headers, fetch, crypto, etc.)
 - Not import any external modules or use require()
 - Return appropriate HTTP status codes and responses of the correct content type (JSON, HTML, plain text, etc.)
-- Handle errors gracefully with try/catch`;
+- Handle errors gracefully with try/catch
+
+<example_output>
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+export class DynamicHandler extends WorkerEntrypoint {
+  	async fetch(request) {
+    	try {
+			const url = new URL(request.url);
+		
+			let result;
+			// ... custom logic based on the request ...
+
+			return Response.json(result, {
+				status: 200
+			});
+    	} catch (error) {
+    		return Response.json({
+				message: "dynamic handler error",
+				error: String(error),
+				errorProps: error,
+			}, { status: 500 });
+    	}
+  	}
+}
+</example_output>
+`;
 
 export function validateCode(code: string): boolean {
 	return code.includes("export class DynamicHandler") && code.includes("async fetch(");
