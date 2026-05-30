@@ -1,51 +1,58 @@
 import type { TestToken } from "../types";
 
-// The test token is a low-privilege, recoverable convenience credential for the
-// app owner's manual testing. It is safe to store/return in plaintext only because
-// the management plane (/api, /ui) sits behind Cloudflare Access. It rotates every
-// 30 minutes via KV expiry: once it lapses, the next owner read mints a fresh one.
-const TTL_SECONDS = 30 * 60;
+// Stateless HMAC-signed test token — no storage needed.
+// Format: test_{expiresAtUnix}_{mac32}
+// HMAC input: "${appId}:${expiresAtUnix}", keyed by APP_ID_SECRET.
+// Binding the HMAC to both appId and expiry means the token is:
+//   - unforgeable without APP_ID_SECRET
+//   - scoped to a single app (using it against a different appId fails)
+//   - self-expiring (expiresAt is covered by the MAC, so it can't be bumped)
 
-function kvKey(appId: string): string {
-	return `testtoken:${appId}`;
+const TOKEN_TTL_SECONDS = 1 * 60 * 60;
+const MAC_HEX_LEN = 32; // 128 bits of a SHA-256 MAC — ample for a test credential
+
+const encoder = new TextEncoder();
+
+async function hmacHex(secret: string, message: string): Promise<string> {
+	const key = await crypto.subtle.importKey(
+		"raw",
+		encoder.encode(secret),
+		{ name: "HMAC", hash: "SHA-256" },
+		false,
+		["sign"],
+	);
+	const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
+	return Array.from(new Uint8Array(sig))
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
 }
 
-function generate(): string {
-	return crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
-}
-
-// Read the current test token, minting (rotating) a new one if none is live.
-// Only the (authenticated) management plane should call this — the verify path
-// must never mint.
-export async function getOrRotateTestToken(env: Env, appId: string): Promise<TestToken> {
-	const existing = await env.APP_KV.get(kvKey(appId));
-	if (existing !== null) {
-		return JSON.parse(existing) as TestToken;
-	}
-	const record: TestToken = {
-		token: generate(),
-		expires_at: new Date(Date.now() + TTL_SECONDS * 1000).toISOString(),
+export async function mintTestToken(appId: string, secret: string): Promise<TestToken> {
+	const expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
+	const mac = await hmacHex(secret, `${appId}:${expiresAt}`);
+	return {
+		token: `test_${expiresAt}_${mac.slice(0, MAC_HEX_LEN)}`,
+		expires_at: new Date(expiresAt * 1000).toISOString(),
 	};
-	try {
-		await env.APP_KV.put(kvKey(appId), JSON.stringify(record), { expirationTtl: TTL_SECONDS });
-	} catch {
-		// In the unlikely event of a KV write failure, return the token anyway —
-		// it will be valid for the next 30 minutes as long as it's stored in the
-		// owner's browser and the DO can read it from a subsequent getOrRotate call.
-		console.error({
-			message:
-				"testToken: Failed to store test token in KV; token will still be valid but won't survive rotation until next successful getOrRotate",
-			appId,
-		});
-	}
-	return record;
 }
 
-// Read-only check used by the auth middleware. Returns true only if the supplied
-// token matches the app's live test token.
-export async function verifyTestToken(env: Env, appId: string, rawToken: string): Promise<boolean> {
-	const existing = await env.APP_KV.get(kvKey(appId));
-	if (existing === null) return false;
-	const record = JSON.parse(existing) as TestToken;
-	return record.token === rawToken && Date.parse(record.expires_at) > Date.now();
+// Pure verification — no I/O, no storage. Returns true only when the token was
+// minted by this service for this specific appId and has not expired.
+export async function verifyTestToken(
+	appId: string,
+	rawToken: string,
+	secret: string,
+): Promise<boolean> {
+	if (!rawToken.startsWith("test_")) return false;
+	const parts = rawToken.split("_");
+	if (parts.length !== 3) return false;
+	const [, expiresAtStr, mac] = parts;
+	if (mac.length !== MAC_HEX_LEN) return false;
+	const expiresAt = Number(expiresAtStr);
+	if (!Number.isInteger(expiresAt) || expiresAt <= 0) return false;
+	if (expiresAt < Math.floor(Date.now() / 1000)) return false;
+	const expected = await hmacHex(secret, `${appId}:${expiresAt}`);
+	let diff = 0;
+	for (let i = 0; i < MAC_HEX_LEN; i++) diff |= mac.charCodeAt(i) ^ expected.charCodeAt(i);
+	return diff === 0;
 }

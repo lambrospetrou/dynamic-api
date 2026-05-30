@@ -12,7 +12,7 @@ import {
 	UpdateVisibilitySchema,
 } from "./lib/schemas";
 import { generateAppId, parseRef, verifyAppId } from "./lib/ref";
-import { getOrRotateTestToken, verifyTestToken } from "./lib/testToken";
+import { mintTestToken, verifyTestToken } from "./lib/testToken";
 import {
 	hashToken,
 	invalidateTokenCache,
@@ -111,7 +111,7 @@ app.post("/api/apps", async (c) => {
 app.get("/api/apps/:id", async (c) => {
 	const record = await getAppRecordFresh(c.env, c.req.param("id"));
 	if (!record) return c.json({ error: "Not found" }, 404);
-	const test_token = await getOrRotateTestToken(c.env, record.id);
+	const test_token = await mintTestToken(record.id, c.env.APP_ID_SECRET);
 	return c.json({ ...record, test_token });
 });
 
@@ -294,7 +294,7 @@ app.get("/api/apps/:id/tokens", async (c) => {
 	if (!existing) return c.json({ error: "Not found" }, 404);
 	const stub = c.env.APP_DO.get(c.env.APP_DO.idFromName(existing.id));
 	const tokens = await stub.listTokens();
-	const test_token = await getOrRotateTestToken(c.env, existing.id);
+	const test_token = await mintTestToken(existing.id, c.env.APP_ID_SECRET);
 	return c.json({ tokens, test_token });
 });
 
@@ -341,7 +341,7 @@ app.use("/apps/:id/*", async (c, next) => {
 	// fallback so the owner can click an app URL without managing a secret.
 	const valid =
 		(await verifyAppToken(c.env, appId, rawToken)) ||
-		(await verifyTestToken(c.env, appId, rawToken));
+		(await verifyTestToken(appId, rawToken, c.env.APP_ID_SECRET));
 	if (!valid) return c.json({ error: "Unauthorized, invalid token" }, 401);
 	return next();
 });

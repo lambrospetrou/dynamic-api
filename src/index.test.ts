@@ -501,7 +501,9 @@ describe("DELETE /api/apps/:id", () => {
 		const { token } = await jsonFetch(`/api/apps/${id}/tokens`, "POST", {}).then((r) =>
 			r.json<any>(),
 		);
-		expect((await appFetch(`/apps/${id}/`, { headers: { Authorization: `Bearer ${token}` } })).status).not.toBe(401);
+		expect(
+			(await appFetch(`/apps/${id}/`, { headers: { Authorization: `Bearer ${token}` } })).status,
+		).not.toBe(401);
 
 		const delRes = await appFetch(`/api/apps/${id}`, { method: "DELETE" });
 		expect(delRes.status).toBe(204);
@@ -510,7 +512,9 @@ describe("DELETE /api/apps/:id", () => {
 		const { apps } = await appFetch("/api/apps").then((r) => r.json<any>());
 		expect(apps.some((a: any) => a.id === id)).toBe(false);
 		// Exec plane: app gone → 404 (not 401 — the auth check is never reached).
-		expect((await appFetch(`/apps/${id}/`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(404);
+		expect(
+			(await appFetch(`/apps/${id}/`, { headers: { Authorization: `Bearer ${token}` } })).status,
+		).toBe(404);
 	});
 
 	it("retries cleanly when the DO was already destroyed but the registry entry survived", async () => {

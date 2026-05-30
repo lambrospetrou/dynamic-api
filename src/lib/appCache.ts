@@ -80,7 +80,6 @@ export async function evictApp(env: Env, appId: string, versions: number[]): Pro
 	for (const v of versions) appCache.delete(`${appId}@${v}`);
 	await Promise.all([
 		env.APP_KV.delete(`app:${appId}`),
-		env.APP_KV.delete(`testtoken:${appId}`),
 		...versions.map((v) => env.APP_KV.delete(`app:${appId}@${v}`)),
 	]);
 }
