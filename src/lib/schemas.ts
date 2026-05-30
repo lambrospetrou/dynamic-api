@@ -22,6 +22,7 @@ export const UpdateVisibilitySchema = v.object({
 
 export const UpdateAppSchema = v.object({
 	description: v.pipe(v.string(), v.minLength(1), v.maxLength(4000)),
+	code: v.optional(v.pipe(v.string(), v.minLength(1))),
 });
 
 export const MintTokenSchema = v.object({

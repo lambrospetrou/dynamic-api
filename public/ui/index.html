@@ -386,6 +386,7 @@
 				const app = selectedApp.value;
 				const [editing, setEditing] = useState(false);
 				const [desc, setDesc] = useState("");
+				const [code, setCode] = useState("");
 				const [err, setErr] = useState("");
 				const [busy, setBusy] = useState(false);
 				const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -410,6 +411,7 @@
 
 				function startEdit() {
 					setDesc(app.current.prompt);
+					setCode("");
 					setEditing(true);
 					setErr("");
 				}
@@ -423,9 +425,11 @@
 					setBusy(true);
 					setErr("");
 					try {
+						const body = { description: desc.trim() };
+						if (code.trim()) body.code = code.trim();
 						await apiFetch(`/apps/${app.id}`, {
 							method: "PUT",
-							body: JSON.stringify({ description: desc.trim() }),
+							body: JSON.stringify(body),
 						});
 						setEditing(false);
 						await loadApp(app.id);
@@ -484,6 +488,16 @@
 											required
 										></textarea>
 									</label>
+									<label>
+										Code <small class="muted">(optional — leave blank to regenerate from description)</small>
+										<textarea
+											rows="12"
+											style="font-family:monospace;font-size:0.8rem"
+											value=${code}
+											onInput=${(e) => setCode(e.target.value)}
+											placeholder="Paste code here to use it as-is instead of generating…"
+										></textarea>
+									</label>
 									${err && html`<p class="error">${err}</p>`}
 									<div style="display:flex;gap:0.5rem">
 										<button
@@ -495,7 +509,7 @@
 											Cancel
 										</button>
 										<button type="submit" disabled=${busy}>
-											${busy ? html`<${Spinner} />Regenerating…` : "Save & Regenerate"}
+											${busy ? html`<${Spinner} />${code.trim() ? "Saving…" : "Regenerating…"}` : code.trim() ? "Save" : "Save & Regenerate"}
 										</button>
 									</div>
 								</form>

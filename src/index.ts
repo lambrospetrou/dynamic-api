@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import { tryWhile } from "durable-utils/retries";
 import { evictApp, getAppRecord, getAppRecordFresh, writeAppRecord } from "./lib/appCache";
-import { generateCode } from "./lib/codegen";
+import { generateCode, validateCode } from "./lib/codegen";
 import {
 	ChannelNameSchema,
 	CreateAppSchema,
@@ -156,10 +156,17 @@ app.put("/api/apps/:id", async (c) => {
 	if (!existing) return c.json({ error: "Not found" }, 404);
 
 	let code: string;
-	try {
-		code = await generateCode(c.env, input.description, existing.current.code);
-	} catch (err) {
-		return c.json({ error: String(err) }, 422);
+	if (input.code) {
+		if (!validateCode(input.code)) {
+			return c.json({ error: "Provided code failed validation: must export class DynamicHandler extending WorkerEntrypoint with an async fetch method" }, 422);
+		}
+		code = input.code;
+	} else {
+		try {
+			code = await generateCode(c.env, input.description, existing.current.code);
+		} catch (err) {
+			return c.json({ error: String(err) }, 422);
+		}
 	}
 
 	// The DO owns the read-modify-write; expectedVersion guards against another
